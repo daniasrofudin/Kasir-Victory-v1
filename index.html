@@ -128,10 +128,17 @@ var DEFAULT_CFG = {
     {nama:'Paket Mini (240 pcs)', pcs:240, harga:440000, hargaGrab:0, aktif:true}
   ],
   kasir: ['Dani','Agung'],
+  karyawan: [{nama:'Dani', pin:'', peran:'Pemilik', aktif:true}, {nama:'Agung', pin:'', peran:'Pemilik', aktif:true}],
+  jadwal: [{nama:'Shift 1', mulai:'10:00', selesai:'16:00'}, {nama:'Shift 2', mulai:'15:30', selesai:'21:30'}],
+  kategori: ['Bahan baku (tepung, telur, susu, mentega)','Topping & isian','Kemasan (mika, plastik, kertas)','Gas & bahan bakar','Listrik & air',
+    'Transportasi & ongkir','Perawatan & perbaikan alat','Kebersihan & perlengkapan kecil','Pulsa, internet & aplikasi','Lain-lain'],
   outlet: ['Plosokandang','Kepatihan'],
   maxTopping: 5,
-  pin: '1234'
+  pin: '1234',
+  batasKeluar: 50000,
+  toleransi: 10
 };
+var APP_VERSI = '2.0';
 
 var cfg = load('cfg', DEFAULT_CFG);
 var S = load('settings', {url:'', key:'', outlet:'', device:'', latihan:false, printer:false, autoPrint:false, setupDone:false});
@@ -139,8 +146,11 @@ if(!S.device){ S.device = Math.random().toString(36).slice(2,6).toUpperCase(); s
 var shift = load('shift', null);
 var queue = load('queue', []);
 var txLog = load('txlog', []);
+var kasLog = load('kaslog', []);
+var shiftHist = load('shifthist', []);
+['karyawan','jadwal','kategori','batasKeluar','toleransi'].forEach(function(k){ if(cfg[k]===undefined) cfg[k] = DEFAULT_CFG[k]; });
 
-var ui = {tab:'kasir', kanal:null, racik:[], qty:1, cart:[], syncState:'', lastSync:null, rekap:'hari'};
+var ui = {lastWa:load('lastwa',''), tab:'kasir', kanal:null, racik:[], qty:1, cart:[], syncState:'', lastSync:null, rekap:'hari', handover:load('handover', null), modal:null};
 
 /* =================== UTIL =================== */
 function rp(n){ n = Math.round(Number(n)||0); return 'Rp' + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
@@ -364,7 +374,11 @@ function viewRiwayat(){
     var sync = t.synced===null ? '' : t.synced ? '<span class="tag ok">✓ terkirim</span>' : '<span class="tag">⏳ antre</span>';
     h += '<div class="line" data-a="txd" data-v="'+esc(t.id)+'"><div class="nm"><b>'+jam(t.time)+' · '+rp(t.total)+' '+tag+'</b><small>'+esc(t.kanal)+' · '+esc(t.bayar)+' · '+num(t.pcs)+' pcs · '+esc(t.items.map(function(i){ return (i.label||i.nama)+' ×'+i.qty; }).join(', '))+'</small></div>'+sync+'</div>';
   });
-  h += '</div><p class="muted" style="text-align:center">Riwayat lengkap semua HP ada di Google Sheet, tab "Kasir Transaksi".</p>';
+  h += '</div>';
+  var ks = kasLog.filter(function(k){ return dKey(k.time)===today; });
+  if(ks.length){ h += '<div class="card"><h3>Uang keluar dari laci hari ini</h3>'+ks.map(function(k){ return '<div class="kv"><span>'+jam(k.time)+' · '+esc(k.kasir)+' · '+esc(k.jenis==='Setoran'?'Setoran':k.kategori)+(k.keterangan?'<br><small class="muted">'+esc(k.keterangan)+'</small>':'')+'</span><b>'+rp(k.nominal)+'</b></div>'; }).join('')+'</div>'; }
+  if(ui.lastWa) h += '<a class="btn alt" style="text-decoration:none;margin-bottom:12px" href="https://wa.me/?text='+encodeURIComponent(ui.lastWa)+'" target="_blank" rel="noopener">Kirim ulang laporan harian terakhir ke WhatsApp</a>';
+  h += '<p class="muted" style="text-align:center">Riwayat lengkap semua HP ada di Google Sheet, tab "Kasir Transaksi".</p>';
   return h;
 }
 function txById(id){ for(var i=0;i<txLog.length;i++) if(txLog[i].id===id) return txLog[i]; return null; }
@@ -437,56 +451,235 @@ function viewRekap(){
 }
 
 /* ---------- SHIFT ---------- */
+/* ---------- MASUK SHIFT (ABSEN) ---------- */
+function karyawanAktif(){
+  var k = (cfg.karyawan && cfg.karyawan.length) ? cfg.karyawan : (cfg.kasir||[]).map(function(n){ return {nama:n, pin:'', peran:'Pemilik', aktif:true}; });
+  k = k.filter(function(x){ return x.aktif; });
+  return k.length ? k : [{nama:'Kasir', pin:'', peran:'Karyawan', aktif:true}];
+}
+function menitDari(hhmm){ var p = String(hhmm||'0:0').split(':'); return Number(p[0])*60 + Number(p[1]||0); }
+function menitSekarang(d){ d = d||new Date(); return d.getHours()*60 + d.getMinutes(); }
+function tebakShift(){
+  var j = cfg.jadwal||[]; if(!j.length) return null;
+  var now = menitSekarang(), best = null, bd = 1e9;
+  j.forEach(function(x){ var d = Math.abs(now - menitDari(x.mulai)); if(now > menitDari(x.selesai)) d += 600; if(d < bd){ bd = d; best = x; } });
+  return best ? best.nama : null;
+}
+function jadwalInfo(n){ var j = cfg.jadwal||[]; for(var i=0;i<j.length;i++) if(j[i].nama===n) return j[i]; return null; }
 function renderShiftOpen(){
-  var nama = cfg.kasir.length ? cfg.kasir : ['Kasir'];
-  var h = '<div class="setup"><h1>Buka shift</h1><p class="muted">'+esc(S.outlet)+' · '+tglTampil(new Date())+'</p>';
-  h += '<label class="f">Siapa yang jaga kasir?</label>' + nama.map(function(n){ return '<button class="optbtn'+(ui.shiftKasir===n?' on':'')+'" data-a="pilihkasir" data-v="'+esc(n)+'"><b>'+esc(n)+'</b></button>'; }).join('');
-  h += '<label class="f">Modal awal di laci (uang kembalian)</label><input class="inp" id="modal" inputmode="numeric" placeholder="0" value="'+(ui.modal?num(ui.modal):'')+'">';
-  h += '<div class="quick" style="margin-top:8px">'+[0,50000,100000,200000].map(function(v){ return '<button class="mini" data-a="modal" data-v="'+v+'" style="flex:1">'+(v?num(v):'0')+'</button>'; }).join('')+'</div>';
-  h += '<button class="btn" data-a="bukashift" style="margin-top:18px" '+(ui.shiftKasir?'':'disabled')+'>Mulai jualan</button>';
+  maybeRefresh();
+  var orang = karyawanAktif();
+  if(ui.shiftPilih===undefined) ui.shiftPilih = tebakShift();
+  var h = '<div class="setup"><h1>Masuk shift</h1><p class="muted">'+esc(S.outlet)+' · '+tglTampil(new Date())+' · '+jam(new Date())+'</p>';
+  if(ui.handover) h += '<div class="card" style="background:#FFF1C2;border-color:#F0D98A"><b>Serah terima dari '+esc(ui.handover.dari)+'</b><br><span class="muted">Uang di laci dihitung: </span><b>'+rp(ui.handover.amount)+'</b></div>';
+  h += '<label class="f">Siapa yang masuk?</label><div class="quick">' + orang.map(function(o){ return '<button class="qb'+(ui.shiftKasir===o.nama?' sel':'')+'" style="'+(ui.shiftKasir===o.nama?'border-color:var(--coklat);background:#FBE9C6':'')+'" data-a="pilihkasir" data-v="'+esc(o.nama)+'"><b>'+esc(o.nama)+'</b><small>'+esc(o.peran)+'</small></button>'; }).join('') + '</div>';
+  var sel = orang.filter(function(o){ return o.nama===ui.shiftKasir; })[0];
+  if(sel && sel.pin) h += '<label class="f">PIN '+esc(sel.nama)+'</label><input class="inp" id="pinMasuk" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="4 angka">';
+  if((cfg.jadwal||[]).length){
+    h += '<label class="f">Shift</label><div class="seg" style="margin:0">' + cfg.jadwal.map(function(x){ return '<button data-a="pilihshift" data-v="'+esc(x.nama)+'" class="'+(ui.shiftPilih===x.nama?'on':'')+'">'+esc(x.nama)+'<br><small style="font-weight:500">'+esc(x.mulai)+'–'+esc(x.selesai)+'</small></button>'; }).join('') + '</div>';
+  }
+  var mv = ui.modal!=null ? ui.modal : (ui.handover ? ui.handover.amount : 0);
+  h += '<label class="f">Modal awal di laci'+(ui.handover?' (dari serah terima)':'')+'</label><input class="inp" id="modal" inputmode="numeric" placeholder="0" value="'+(mv?num(mv):'')+'">';
+  if(!ui.handover) h += '<div class="quick" style="margin-top:8px">'+[0,50000,100000,200000].map(function(v){ return '<button class="mini" data-a="modal" data-v="'+v+'" style="flex:1">'+(v?num(v):'0')+'</button>'; }).join('')+'</div>';
+  h += '<button class="btn" data-a="bukashift" style="margin-top:18px" '+(ui.shiftKasir?'':'disabled')+'>Masuk & mulai jualan</button>';
   h += '<button class="btn alt" data-a="tab" data-v="atur" style="margin-top:8px" id="keAtur">⚙️ Pengaturan</button></div>';
   $('app').innerHTML = h;
   var m = $('modal'); if(m) m.addEventListener('input', function(){ ui.modal = digits(m.value); });
 }
+function bukaShift(){
+  var orang = karyawanAktif().filter(function(o){ return o.nama===ui.shiftKasir; })[0];
+  if(!orang) return;
+  if(orang.pin){
+    var p = $('pinMasuk'); var v = p ? p.value.trim() : '';
+    if(v !== String(orang.pin)){
+      if(S.url && !ui.pinRetry){ ui.pinRetry = true; toast('Mengecek PIN terbaru…'); fetchConfig(function(){ bukaShiftRetry(v); }); return; }
+      if(p) p.value=''; toast('PIN salah'); return;
+    }
+  }
+  ui.pinRetry = false;
+  var now = new Date(), jd = jadwalInfo(ui.shiftPilih), telat = 0;
+  if(jd){ var t = menitSekarang(now) - menitDari(jd.mulai); telat = t > (cfg.toleransi||0) ? t : 0; }
+  var modal = ui.modal!=null ? ui.modal : (ui.handover ? ui.handover.amount : 0);
+  shift = {id:'SHF-'+S.device+'-'+Date.now().toString(36).toUpperCase(), kasir:orang.nama, modal:modal||0, buka:now.toISOString(),
+    shiftNama: jd ? jd.nama : '', jadwalMulai: jd ? jd.mulai : '', jadwalSelesai: jd ? jd.selesai : '', telat:telat, dari: ui.handover ? ui.handover.dari : ''};
+  save('shift', shift);
+  queue.push({type:'absen', uid:'AB-'+shift.id, id:shift.id, outlet:S.outlet, nama:shift.kasir, shiftNama:shift.shiftNama, jadwalMulai:shift.jadwalMulai,
+    jadwalSelesai:shift.jadwalSelesai, masuk:shift.buka, telat:telat, status:S.latihan?'Latihan':'OK'});
+  save('queue', queue);
+  ui.handover = null; save('handover', null); ui.modal = null; ui.shiftKasir = null; ui.shiftPilih = undefined; ui.tab = 'kasir';
+  render(); toast('Absen masuk '+jam(now)+(telat?' · telat '+telat+' menit':'')+' · Selamat jualan, '+shift.kasir+'!'); syncNow();
+}
+function bukaShiftRetry(v){
+  var orang = karyawanAktif().filter(function(o){ return o.nama===ui.shiftKasir; })[0];
+  renderShiftOpen();
+  if(orang && orang.pin && v===String(orang.pin)){ var p = $('pinMasuk'); if(p) p.value = v; bukaShift(); }
+  else { ui.pinRetry = false; toast('PIN salah'); }
+}
+
+/* ---------- SHIFT: KAS, SERAH TERIMA, TUTUP TOKO ---------- */
 function shiftStats(){
-  var s = {tunai:0, qris:0, grab:0, n:0};
+  var s = {tunai:0, qris:0, grab:0, n:0, keluar:0, setor:0};
   txLog.forEach(function(t){ if(t.shiftId!==shift.id || t.status==='Batal') return; s.n++;
     if(t.bayar==='Tunai') s.tunai += t.total; else if(t.bayar==='QRIS') s.qris += t.total; else s.grab += t.total; });
+  kasLog.forEach(function(k){ if(k.shiftId!==shift.id) return; if(k.jenis==='Pengeluaran') s.keluar += k.nominal; else s.setor += k.nominal; });
+  s.harus = shift.modal + s.tunai - s.keluar - s.setor;
   return s;
 }
 function viewShift(){
-  var s = shiftStats(), harus = shift.modal + s.tunai;
-  var h = '<div class="card"><h3>Shift berjalan <span>buka '+jam(shift.buka)+'</span></h3>'+
-    '<div class="kv"><span>Kasir</span><b>'+esc(shift.kasir)+'</b></div><div class="kv"><span>Modal awal</span><b>'+rp(shift.modal)+'</b></div>'+
+  var s = shiftStats();
+  var h = '<div class="card"><h3>Shift berjalan <span>'+esc(shift.shiftNama||'')+' · masuk '+jam(shift.buka)+(shift.telat?' · telat '+shift.telat+' mnt':'')+'</span></h3>'+
+    '<div class="kv"><span>Kasir</span><b>'+esc(shift.kasir)+'</b></div><div class="kv"><span>Modal awal'+(shift.dari?' (dari '+esc(shift.dari)+')':'')+'</span><b>'+rp(shift.modal)+'</b></div>'+
     '<div class="kv"><span>Penjualan tunai</span><b>'+rp(s.tunai)+'</b></div><div class="kv"><span>QRIS</span><b>'+rp(s.qris)+'</b></div><div class="kv"><span>GrabFood</span><b>'+rp(s.grab)+'</b></div>'+
-    '<div class="kv"><span>Jumlah transaksi</span><b>'+s.n+'</b></div><div class="kv" style="font-size:17px"><span>Uang tunai seharusnya di laci</span><b>'+rp(harus)+'</b></div></div>';
-  h += '<div class="card"><h3>Tutup shift</h3><label class="f">Uang di laci setelah dihitung</label><input class="inp" id="hitung" inputmode="numeric" placeholder="hitung semua uang di laci">'+
+    '<div class="kv"><span>Pengeluaran dari laci</span><b>− '+rp(s.keluar)+'</b></div><div class="kv"><span>Setoran ke pemilik</span><b>− '+rp(s.setor)+'</b></div>'+
+    '<div class="kv"><span>Jumlah transaksi</span><b>'+s.n+'</b></div><div class="kv" style="font-size:17px"><span>Uang tunai seharusnya di laci</span><b>'+rp(s.harus)+'</b></div></div>';
+  h += '<div class="card"><h3>Uang keluar dari laci</h3><div class="row"><button class="btn alt" data-a="keluar" style="flex:1">➖ Pengeluaran</button><button class="btn alt" data-a="setor" style="flex:1">💵 Setor ke pemilik</button></div>';
+  var ks = kasLog.filter(function(k){ return k.shiftId===shift.id; });
+  ks.forEach(function(k){ h += '<div class="kv"><span>'+jam(k.time)+' · '+esc(k.jenis==='Setoran'?'Setoran':k.kategori)+(k.keterangan?'<br><small class="muted">'+esc(k.keterangan)+'</small>':'')+'</span><b>'+rp(k.nominal)+'</b></div>'; });
+  if(!ks.length) h += '<p class="hint">Belum ada. Setiap uang keluar dari laci wajib dicatat di sini (simpan notanya).</p>';
+  h += '</div>';
+  h += '<div class="card"><h3>Akhiri shift</h3><label class="f">Uang di laci setelah dihitung</label><input class="inp" id="hitung" inputmode="numeric" placeholder="hitung semua uang di laci">'+
     '<div class="kv" style="margin-top:8px;font-size:17px"><span>Selisih</span><b id="selisih">-</b></div>'+
-    '<label class="f">Catatan (opsional)</label><input class="inp" id="scat" placeholder="mis. uang diambil untuk beli gas Rp20.000">'+
-    '<button class="btn kuning" data-a="tutupshift" style="margin-top:14px">Tutup shift & kirim laporan</button></div>';
+    '<label class="f">Catatan shift (opsional)</label><input class="inp" id="scat" placeholder="mis. ada uang palsu, alat rusak">'+
+    '<button class="btn kuning" data-a="serahterima" style="margin-top:14px">🔄 Serah terima ke shift berikutnya</button>'+
+    '<button class="btn" data-a="tutuptoko" style="margin-top:8px">🌙 Tutup toko (shift terakhir)</button></div>';
   return h;
 }
 function bindView(){
   var i = $('hitung');
-  if(i && shift){ i.addEventListener('input', function(){ var harus = shift.modal + shiftStats().tunai, d = digits(i.value) - harus, el = $('selisih');
+  if(i && shift){ i.addEventListener('input', function(){ var harus = shiftStats().harus, d = digits(i.value) - harus, el = $('selisih');
     el.textContent = i.value ? (d===0 ? 'Pas ✓' : (d>0?'Lebih ':'Kurang ')+rp(Math.abs(d))) : '-'; el.style.color = d===0?'var(--hijau)':'var(--merah)'; }); }
 }
-function tutupShift(){
-  var i = $('hitung'); if(!i || i.value.trim()===''){ toast('Isi dulu uang yang dihitung'); return; }
-  var s = shiftStats(), harus = shift.modal + s.tunai, hit = digits(i.value);
-  var rec = {type:'shift', uid:'SH-'+shift.id, id:shift.id, buka:shift.buka, tutup:new Date().toISOString(), outlet:S.outlet, kasir:shift.kasir, modal:shift.modal,
-    tunai:s.tunai, qris:s.qris, grab:s.grab, seharusnya:harus, dihitung:hit, selisih:hit-harus, jumlahTx:s.n, catatan:($('scat')||{}).value||''};
-  if(S.latihan) rec.catatan = '[LATIHAN] '+rec.catatan;
+function openKas(jenis){
+  var h = '<div class="sheet"><h2>'+(jenis==='Setoran'?'Setor uang ke pemilik':'Catat pengeluaran dari laci')+'</h2>';
+  if(jenis==='Pengeluaran'){
+    var kat = (cfg.kategori && cfg.kategori.length) ? cfg.kategori : DEFAULT_CFG.kategori;
+    h += '<label class="f">Untuk apa?</label><select class="inp" id="kKat">'+kat.map(function(k){ return '<option>'+esc(k)+'</option>'; }).join('')+'</select>';
+  }
+  h += '<label class="f">Keterangan</label><input class="inp" id="kKet" placeholder="'+(jenis==='Setoran'?'mis. diambil Agung':'mis. gas 3 kg, es batu')+'">'+
+    '<label class="f">Nominal</label><input class="inp" id="kNom" inputmode="numeric" placeholder="0">';
+  if(jenis==='Pengeluaran' && cfg.batasKeluar) h += '<p class="muted">Di atas '+rp(cfg.batasKeluar)+' perlu PIN pemilik. Simpan nota belanjanya.</p>';
+  if(jenis==='Setoran') h += '<p class="muted">Perlu PIN pemilik yang menerima uang.</p>';
+  h += '<button class="btn" data-a="kasok" data-v="'+jenis+'" style="margin-top:12px">Simpan</button><button class="btn alt" data-a="close" style="margin-top:8px">Batal</button></div>';
+  sheet(h);
+  var n = $('kNom'); if(n) n.addEventListener('input', function(){ var v = digits(n.value); n.value = v ? num(v) : ''; });
+}
+function kasOk(jenis){
+  var nom = digits(($('kNom')||{}).value), ket = (($('kKet')||{}).value||'').trim(), kat = jenis==='Pengeluaran' ? ($('kKat')||{}).value : '';
+  if(!nom){ toast('Isi nominalnya'); return; }
+  if(jenis==='Pengeluaran' && !ket){ toast('Isi keterangannya'); return; }
+  var simpan = function(pakaiPin){
+    var now = new Date(), id = 'KAS-'+S.device+'-'+Date.now().toString(36).toUpperCase();
+    var rec = {type:'kas', uid:id, id:id, time:now.toISOString(), outlet:S.outlet, kasir:shift.kasir, jenis:jenis, kategori:kat, keterangan:ket,
+      nominal:nom, pakaiPin:!!pakaiPin, shiftId:shift.id, status:S.latihan?'Latihan':'OK'};
+    queue.push(rec); save('queue', queue);
+    kasLog.unshift(JSON.parse(JSON.stringify(rec))); pruneKas(); save('kaslog', kasLog);
+    closeSheet(); toast((jenis==='Setoran'?'Setoran ':'Pengeluaran ')+rp(nom)+' tercatat'); render(); syncNow();
+  };
+  if(jenis==='Setoran' || (cfg.batasKeluar && nom > cfg.batasKeluar)){
+    askPin(jenis==='Setoran' ? 'PIN pemilik penerima setoran' : 'Pengeluaran '+rp(nom)+' perlu PIN pemilik', function(){ simpan(true); });
+  } else simpan(false);
+}
+function pruneKas(){ var batas = Date.now() - 35*86400000; kasLog = kasLog.filter(function(k){ return new Date(k.time).getTime() >= batas; }); }
+
+function akhiriShift(jenisTutup){
+  var i = $('hitung'); if(!i || i.value.trim()===''){ toast('Isi dulu uang yang dihitung'); return null; }
+  var s = shiftStats(), hit = digits(i.value), now = new Date();
+  var rec = {type:'shift', uid:'SH-'+shift.id, id:shift.id, buka:shift.buka, tutup:now.toISOString(), outlet:S.outlet, kasir:shift.kasir, modal:shift.modal,
+    tunai:s.tunai, qris:s.qris, grab:s.grab, keluar:s.keluar, setor:s.setor, seharusnya:s.harus, dihitung:hit, selisih:hit-s.harus, jumlahTx:s.n,
+    catatan:(S.latihan?'[LATIHAN] ':'')+(($('scat')||{}).value||''), shiftNama:shift.shiftNama||'', jenisTutup:jenisTutup};
+  return rec;
+}
+function simpanAkhirShift(rec){
   queue.push(rec); save('queue', queue);
-  var lap = rec;
-  shift = null; save('shift', null); ui.shiftKasir = null; ui.modal = 0; ui.tab = 'kasir'; ui.cart = []; ui.racik = [];
-  render();
-  sheet('<div class="sheet" style="text-align:center"><div class="ok-ic">✓</div><h2>Shift ditutup</h2>'+
-    '<div class="kv"><span>Kasir</span><b>'+esc(lap.kasir)+'</b></div><div class="kv"><span>Transaksi</span><b>'+lap.jumlahTx+'</b></div>'+
-    '<div class="kv"><span>Tunai + modal</span><b>'+rp(lap.seharusnya)+'</b></div><div class="kv"><span>Uang dihitung</span><b>'+rp(lap.dihitung)+'</b></div>'+
-    '<div class="kv"><span>Selisih</span><b style="color:'+(lap.selisih===0?'var(--hijau)':'var(--merah)')+'">'+(lap.selisih===0?'Pas':rp(lap.selisih))+'</b></div>'+
-    '<button class="btn" data-a="close" style="margin-top:14px">OK</button></div>');
-  syncNow();
+  shiftHist.unshift({id:rec.id, kasir:rec.kasir, shiftNama:rec.shiftNama, buka:rec.buka, tutup:rec.tutup, telat:shift.telat||0, selisih:rec.selisih,
+    keluar:rec.keluar, setor:rec.setor, dihitung:rec.dihitung, outlet:S.outlet, latihan:!!S.latihan});
+  shiftHist = shiftHist.filter(function(x){ return Date.now() - new Date(x.tutup).getTime() < 35*86400000; }); save('shifthist', shiftHist);
+  shift = null; save('shift', null); ui.cart = []; ui.racik = []; ui.tab = 'kasir';
+}
+function serahTerima(){
+  var rec = akhiriShift('Serah terima'); if(!rec) return;
+  simpanAkhirShift(rec);
+  ui.handover = {amount: rec.dihitung, dari: rec.kasir}; save('handover', ui.handover); ui.modal = null; ui.shiftPilih = undefined;
+  render(); syncNow();
+  sheet('<div class="sheet" style="text-align:center"><div class="ok-ic">✓</div><h2>Shift '+esc(rec.kasir)+' selesai</h2>'+
+    '<div class="kv"><span>Uang seharusnya</span><b>'+rp(rec.seharusnya)+'</b></div><div class="kv"><span>Uang dihitung</span><b>'+rp(rec.dihitung)+'</b></div>'+
+    '<div class="kv"><span>Selisih</span><b style="color:'+(rec.selisih===0?'var(--hijau)':'var(--merah)')+'">'+(rec.selisih===0?'Pas':rp(rec.selisih))+'</b></div>'+
+    '<p class="muted">Kasir berikutnya: pilih nama, isi PIN, lalu Masuk. Modal awal otomatis '+rp(rec.dihitung)+'.</p>'+
+    '<button class="btn" data-a="close" style="margin-top:10px">OK</button></div>');
+}
+var stokState = {};
+function openTutupToko(){
+  var i = $('hitung'); if(!i || i.value.trim()===''){ toast('Isi dulu uang yang dihitung'); return; }
+  ui.closing = {hitung: i.value, scat: ($('scat')||{}).value||''};
+  renderTutupToko();
+}
+function renderTutupToko(){
+  var h = '<div class="sheet"><h2>Tutup toko</h2><p class="muted">Cek sisa topping. Tap untuk mengganti: Cukup → Menipis → Habis.</p><div class="grid">';
+  activeToppings().forEach(function(t){ var st = stokState[t.nama]||'Cukup';
+    var col = st==='Habis' ? 'background:#FBE4E1;border-color:var(--merah);color:var(--merah)' : st==='Menipis' ? 'background:#FFF1C2;border-color:var(--oranye)' : '';
+    h += '<button class="tp" style="'+col+'" data-a="stok" data-v="'+esc(t.nama)+'">'+esc(t.nama)+'<span class="star" style="color:inherit">'+st+'</span></button>'; });
+  h += '</div><label class="f">Catatan hari ini (kendala, keluhan, alat rusak)</label><textarea class="inp" id="hcat" rows="3">'+esc(ui.hcat||'')+'</textarea>'+
+    '<button class="btn" data-a="tutuptokook" style="margin-top:12px">Simpan & tutup toko</button><button class="btn alt" data-a="close" style="margin-top:8px">Kembali</button></div>';
+  sheet(h);
+  var c = $('hcat'); if(c) c.addEventListener('input', function(){ ui.hcat = c.value; });
+}
+function tutupTokoOk(){
+  var hi = $('hitung'); if(hi) hi.value = ui.closing.hitung;
+  var sc = $('scat'); if(sc) sc.value = ui.closing.scat;
+  var rec = akhiriShift('Tutup toko'); if(!rec) return;
+  simpanAkhirShift(rec);
+  var lap = laporanHarian(rec);
+  queue.push(lap.rec); save('queue', queue);
+  ui.lastWa = lap.text; save('lastwa', lap.text);
+  stokState = {}; ui.hcat = ''; ui.closing = null; ui.handover = null; save('handover', null); ui.modal = null; ui.shiftPilih = undefined;
+  render(); syncNow();
+  sheet('<div class="sheet" style="text-align:center"><div class="ok-ic">🌙</div><h2>Toko ditutup</h2><p class="muted">Laporan harian tersimpan. Kirim ke grup pemilik:</p>'+
+    '<a class="btn" style="background:#1FA855;text-decoration:none;margin-top:6px" href="https://wa.me/?text='+encodeURIComponent(lap.text)+'" target="_blank" rel="noopener">Kirim laporan ke WhatsApp</a>'+
+    '<details style="text-align:left;margin-top:10px"><summary class="muted">Lihat isi laporan</summary><pre style="white-space:pre-wrap;font-size:13px">'+esc(lap.text)+'</pre></details>'+
+    '<button class="btn alt" data-a="close" style="margin-top:8px">Selesai</button></div>');
+}
+function hariIni(t){ return dKey(t)===dKey(new Date()); }
+function laporanHarian(rec){
+  var now = new Date(), lat = !!S.latihan, okStatus = lat ? 'Latihan' : 'OK';
+  var tx = txLog.filter(function(t){ return hariIni(t.time) && t.outlet===S.outlet && t.status===okStatus; });
+  var r = {omzet:0, offline:0, grab:0, online:0, tunai:0, qris:0, pcs:0, n:tx.length}, combo = {};
+  tx.forEach(function(t){ r.omzet += t.total; r.pcs += t.pcs;
+    if(t.kanal==='Offline') r.offline += t.total; else if(isGrab(t.kanal)) r.grab += t.total; else r.online += t.total;
+    if(t.bayar==='Tunai') r.tunai += t.total; else if(t.bayar==='QRIS') r.qris += t.total;
+    t.items.forEach(function(i){ if(i.jenis!=='Paket') combo[i.nama] = (combo[i.nama]||0) + i.qty; }); });
+  var kas = kasLog.filter(function(k){ return hariIni(k.time) && k.outlet===S.outlet && k.status===okStatus; });
+  var keluar = 0, setor = 0, rincian = [];
+  kas.forEach(function(k){ if(k.jenis==='Pengeluaran'){ keluar += k.nominal; rincian.push((k.keterangan||k.kategori)+' '+rp(k.nominal)); } else setor += k.nominal; });
+  var sh = shiftHist.filter(function(x){ return hariIni(x.tutup) && x.outlet===S.outlet && !!x.latihan===lat; }).reverse();
+  var selisih = 0; sh.forEach(function(x){ selisih += x.selisih; });
+  var shiftText = sh.map(function(x){ return x.kasir+(x.shiftNama?' ('+x.shiftNama+')':'')+' '+jam(x.buka)+'–'+jam(x.tutup)+(x.telat?', telat '+x.telat+' mnt':'')+(x.selisih?', selisih '+rp(x.selisih):''); }).join('; ');
+  var habis = [], menipis = [];
+  activeToppings().forEach(function(t){ var st = stokState[t.nama]||'Cukup'; if(st==='Habis') habis.push(t.nama); else if(st==='Menipis') menipis.push(t.nama); });
+  var top = Object.keys(combo).sort(function(a,b){ return combo[b]-combo[a]; }).slice(0,3).map(function(k){ return k+' ('+combo[k]+')'; });
+  var catatan = (ui.hcat||'').trim();
+  var hari = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'][now.getDay()];
+  var L = [];
+  L.push('*LAPORAN HARIAN LEKKER VICTORY*'+(lat?' _(LATIHAN)_':''));
+  L.push(S.outlet+' · '+hari+' '+tglTampil(now));
+  L.push('Ditutup: '+rec.kasir+' '+jam(now));
+  L.push('');
+  L.push('💰 *Omzet: '+rp(r.omzet)+'*');
+  L.push('   '+num(r.pcs)+' pcs · '+r.n+' transaksi');
+  L.push('   Offline '+rp(r.offline)+' · Grab '+rp(r.grab)+(r.online?' · Online '+rp(r.online):''));
+  L.push('   Tunai '+rp(r.tunai)+' · QRIS '+rp(r.qris));
+  L.push('');
+  L.push('🧾 Pengeluaran laci: '+rp(keluar)+(rincian.length?' ('+rincian.join('; ')+')':''));
+  if(setor) L.push('💵 Setoran ke pemilik: '+rp(setor));
+  L.push('🔐 Kas: uang di laci '+rp(rec.dihitung)+' · selisih hari ini '+(selisih===0?'Rp0 ✓':rp(selisih)));
+  L.push('');
+  L.push('👥 Shift: '+(shiftText||'-'));
+  if(top.length) L.push('🔥 Terlaris: '+top.join(', '));
+  L.push('📦 Perlu belanja: '+(habis.length||menipis.length ? (habis.length?'HABIS: '+habis.join(', '):'')+(habis.length&&menipis.length?' · ':'')+(menipis.length?'menipis: '+menipis.join(', '):'') : 'aman'));
+  if(catatan) L.push('📝 Catatan: '+catatan);
+  var id = 'HR-'+S.device+'-'+Date.now().toString(36).toUpperCase();
+  return {text: L.join('\n'), rec: {type:'harian', uid:id, id:id, time:now.toISOString(), outlet:S.outlet, kasir:rec.kasir, omzet:r.omzet, offline:r.offline, grab:r.grab,
+    online:r.online, tunai:r.tunai, qris:r.qris, pcs:r.pcs, transaksi:r.n, keluar:keluar, setor:setor, selisih:selisih, shiftText:shiftText,
+    habis:habis.join(', '), menipis:menipis.join(', '), terlaris:top.join(', '), catatan:catatan, status:okStatus}};
 }
 
 /* ---------- PENGATURAN ---------- */
@@ -499,7 +692,8 @@ function viewAtur(){
   h += '<div class="card"><h3>Koneksi Google Sheet</h3><label class="f">URL Apps Script (Web App)</label><input class="inp" id="sUrl" placeholder="https://script.google.com/macros/s/.../exec" value="'+esc(S.url)+'">'+
     '<label class="f">Kunci koneksi (lihat tab Kasir Menu, sel H14)</label><input class="inp" id="sKey" value="'+esc(S.key)+'">'+
     '<button class="btn" data-a="saveconn" style="margin-top:12px">Simpan & ambil menu terbaru</button>'+
-    '<p class="muted">Menu versi: '+esc(cfg.versi==='bawaan'?'bawaan aplikasi':tglTampil(cfg.versi)+' '+jam(cfg.versi))+' · Antrean: '+queue.length+' data</p>'+
+    '<p class="muted" style="margin-top:10px">'+(!S.url ? '⚪ Belum terhubung (mode demo)' : S.cfgErr ? '🔴 Gagal terhubung: '+esc(S.cfgErr) : S.cfgOk ? '🟢 Terhubung · menu diambil '+tglTampil(S.cfgOk)+' '+jam(S.cfgOk) : '⚪ Belum dicek')+
+    '<br>Antrean belum terkirim: '+queue.length+' data · Aplikasi versi '+APP_VERSI+'</p>'+
     (S.url ? '<button class="btn alt" data-a="syncnow" style="margin-top:6px">Kirim data sekarang</button>' : '<p class="muted">Tanpa URL = mode demo (data hanya tersimpan di HP ini).</p>')+'</div>';
   h += '<div class="card"><h3>Mode & struk</h3>'+
     '<label class="sw"><span>Mode latihan<br><small class="muted">untuk uji coba, tidak masuk laporan</small></span><input type="checkbox" id="sLat" '+(S.latihan?'checked':'')+'></label>'+
@@ -522,9 +716,19 @@ function fetchConfig(cb){
     .then(function(r){ return r.json(); })
     .then(function(j){ if(!j.ok) throw new Error(j.error||'ditolak');
       var c = j.config; if(!c.outlet || !c.outlet.length) c.outlet = cfg.outlet; if(!c.kanal || !c.kanal.length) c.kanal = cfg.kanal;
-      cfg = c; save('cfg', cfg); cb && cb(true); })
-    .catch(function(e){ cb && cb(false, e.message || 'tidak ada sinyal'); });
+      ['karyawan','jadwal','kategori','batasKeluar','toleransi'].forEach(function(k){ if(c[k]===undefined) c[k] = DEFAULT_CFG[k]; });
+      cfg = c; save('cfg', cfg); S.cfgOk = new Date().toISOString(); S.cfgErr = ''; save('settings', S); cb && cb(true); })
+    .catch(function(e){ S.cfgErr = e.message || 'tidak ada sinyal'; save('settings', S); cb && cb(false, S.cfgErr); });
 }
+var lastTry = 0;
+function maybeRefresh(force){
+  if(!S.url) return;
+  if(!force && Date.now() - lastTry < 120000) return;
+  lastTry = Date.now();
+  fetchConfig(function(ok){ if(ok && !shift) { /* layar masuk shift ikut diperbarui */ if(!document.querySelector('.sheet-bg')) render(); } });
+}
+document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible'){ maybeRefresh(); if(queue.length) syncNow(); } });
+setInterval(function(){ maybeRefresh(); }, 600000);
 
 /* ---------- SETUP AWAL ---------- */
 function renderSetup(){
@@ -547,7 +751,12 @@ function askPin(title, ok, cancel){
     '<button class="btn" data-a="pinok" style="margin-top:12px">OK</button><button class="btn alt" data-a="pincancel" style="margin-top:8px">Batal</button></div>');
   setTimeout(function(){ var p = $('pin'); if(p){ p.focus(); p.addEventListener('keydown', function(e){ if(e.key==='Enter') pinOk(); }); } }, 50);
 }
-function pinOk(){ var p = $('pin'); if(String(p.value).trim() === String(cfg.pin||'1234').trim()){ var f = pinCb; closeSheet(); f && f(); } else { p.value=''; toast('PIN salah'); } }
+function pinOk(){ var p = $('pin'), v = String(p.value).trim();
+  if(v === String(cfg.pin||'1234').trim()){ var f = pinCb; closeSheet(); f && f(); return; }
+  if(S.url && !pinOk.retried){ pinOk.retried = true; toast('Mengecek PIN terbaru…');
+    fetchConfig(function(){ pinOk.retried = false; var q = $('pin'); if(!q) return;
+      if(v === String(cfg.pin||'').trim()){ var f2 = pinCb; closeSheet(); f2 && f2(); } else { q.value=''; toast('PIN salah'); } }); return; }
+  p.value=''; toast('PIN salah'); }
 
 /* =================== STRUK (RawBT) =================== */
 function struk(t){
@@ -624,12 +833,17 @@ document.addEventListener('click', function(e){
     case 'void': doVoid(v); break;
     case 'voidok': voidOk(v); break;
     case 'rekap': ui.rekap = v; render(); break;
-    case 'tutupshift': tutupShift(); break;
-    case 'pilihkasir': ui.shiftKasir = v; renderShiftOpen(); break;
+    case 'pilihkasir': ui.shiftKasir = v; ui.pinRetry = false; renderShiftOpen(); setTimeout(function(){ var p=$('pinMasuk'); if(p) p.focus(); }, 50); break;
+    case 'pilihshift': ui.shiftPilih = v; render(); break;
     case 'modal': ui.modal = Number(v); renderShiftOpen(); break;
-    case 'bukashift':
-      shift = {id:'SHF-'+S.device+'-'+Date.now().toString(36).toUpperCase(), kasir:ui.shiftKasir, modal:ui.modal||0, buka:new Date().toISOString()};
-      save('shift', shift); ui.tab = 'kasir'; render(); toast('Selamat jualan, '+shift.kasir+'!'); break;
+    case 'bukashift': bukaShift(); break;
+    case 'keluar': openKas('Pengeluaran'); break;
+    case 'setor': openKas('Setoran'); break;
+    case 'kasok': kasOk(v); break;
+    case 'serahterima': serahTerima(); break;
+    case 'tutuptoko': openTutupToko(); break;
+    case 'stok': var urut = ['Cukup','Menipis','Habis']; stokState[v] = urut[(urut.indexOf(stokState[v]||'Cukup')+1)%3]; renderTutupToko(); break;
+    case 'tutuptokook': tutupTokoOk(); break;
     case 'saveconn': saveConn(); break;
     case 'saveopt': S.latihan = $('sLat').checked; S.printer = $('sPrn').checked; S.autoPrint = $('sAuto').checked; save('settings', S); toast('Tersimpan'); render(); break;
     case 'kunci': aturOpen = false; ui.tab = 'kasir'; render(); break;
@@ -648,7 +862,7 @@ document.addEventListener('click', function(e){
 
 /* =================== MULAI =================== */
 render();
-if(S.url){ fetchConfig(function(ok){ if(ok) render(); }); syncNow(); }
+if(S.url){ lastTry = Date.now(); fetchConfig(function(ok){ if(ok && !document.querySelector('.sheet-bg')) render(); }); syncNow(); }
 if('serviceWorker' in navigator && location.protocol === 'https:'){
   try{ navigator.serviceWorker.register('sw.js').catch(function(){}); }catch(e){}
 }
