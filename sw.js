@@ -1,6 +1,6 @@
-// Kasir Lekker Victory - service worker v3
+// Kasir Lekker Victory - service worker v3.1
 // Halaman diambil dari internet dulu (supaya pembaruan langsung terpakai); kalau tidak ada sinyal, pakai salinan tersimpan.
-var CACHE = 'kasir-lv-v3';
+var CACHE = 'kasir-lv-v3-1';
 var FILES = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(FILES); }).then(function () { return self.skipWaiting(); }));
