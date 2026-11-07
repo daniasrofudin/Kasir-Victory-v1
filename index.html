@@ -156,10 +156,11 @@ var DEFAULT_CFG = {
   member: {perRp:1000, poinTukar:100, nilaiTukar:10000, kanal:['Offline','Online (WA/IG/TikTok)']},
   members: [],
   biaya: {base:668, kresekHarga:200, kresekPcs:6, top:{}, paket:{}},
-  bahan: []
+  bahan: [],
+  bahanInfo: []
 };
-var APP_VERSI = '3.1';
-var CFG_KEYS = ['karyawan','jadwal','kategori','batasKeluar','toleransi','member','members','biaya','bahan'];
+var APP_VERSI = '3.2';
+var CFG_KEYS = ['karyawan','jadwal','kategori','batasKeluar','toleransi','member','members','biaya','bahan','bahanInfo'];
 
 var cfg = load('cfg', DEFAULT_CFG);
 var S = load('settings', {url:'', key:'', outlet:'', device:'', latihan:false, printer:false, autoPrint:false, setupDone:false});
@@ -174,7 +175,7 @@ var localMembers = load('localmembers', []);
 var arrivals = load('arrivals', []);
 var mbaruLog = load('mbarulog', []);
 
-var ui = {lastWa:load('lastwa',''), tab:'kasir', kanal:null, racik:[], qty:1, cart:[], syncState:'', lastSync:null, rekap:'hari', handover:load('handover', null), modal:null};
+var ui = {own:{open:false, tab:'dash', period:'hari', data:load('owndata',null), loading:false, err:''}, lastWa:load('lastwa',''), tab:'kasir', kanal:null, racik:[], qty:1, cart:[], syncState:'', lastSync:null, rekap:'hari', handover:load('handover', null), modal:null};
 
 /* =================== UTIL =================== */
 function rp(n){ n = Math.round(Number(n)||0); return 'Rp' + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
@@ -207,6 +208,11 @@ var ICONS = {
   shift:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   atur:'<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
   eye:'<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+  box:'<path d="M3.5 7.5L12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5L12 12l8.5-4.5M12 12v9"/>',
+  cart:'<circle cx="9" cy="20" r="1.5"/><circle cx="17" cy="20" r="1.5"/><path d="M3 4h2l2.4 11h11l2-8H6.3"/>',
+  dash:'<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="4.5" rx="1.5"/><rect x="13.5" y="11" width="7" height="9.5" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/>',
+  refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>',
+  close:'<path d="M6 6l12 12M18 6L6 18"/>',
   eyeoff:'<path d="M3 3l18 18"/><path d="M10.6 6A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-3 3.6M6.4 6.9C3.9 8.6 2.5 12 2.5 12S6 18.5 12 18.5c1.6 0 3-.4 4.2-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>'
 };
 function ic(n){ return '<svg class="i" viewBox="0 0 24 24" aria-hidden="true">'+(ICONS[n]||'')+'</svg>'; }
@@ -270,6 +276,7 @@ function render(){
 }
 function renderInner(){
   if(!S.setupDone || !S.outlet) return renderSetup();
+  if(ui.own.open) return renderOwner();
   if(!shift && ui.tab==='atur' && ui.forceAtur){
     $('app').innerHTML = '<header><div class="brand"><b>Pengaturan</b><small>'+esc(S.outlet)+'</small></div>'+syncPill()+'</header><main>'+viewAtur()+
       '<button class="btn alt" data-a="tutupatur">← Kembali ke buka shift</button></main>';
@@ -760,6 +767,8 @@ function viewShift(){
   ks.forEach(function(k){ h += '<div class="kv"><span>'+jam(k.time)+' · '+esc(k.jenis==='Setoran'?'Setoran':k.kategori)+(k.keterangan?'<br><small class="muted">'+esc(k.keterangan)+'</small>':'')+'</span><b>'+rp(k.nominal)+'</b></div>'; });
   if(!ks.length) h += '<p class="hint">Belum ada. Setiap uang keluar dari laci wajib dicatat di sini (simpan notanya).</p>';
   h += '</div>';
+  h += '<div class="card"><h3>Kiriman bahan dari gudang</h3><p class="hint">Catat setiap kali menerima bahan dari gudang/pusat, supaya stok per outlet cocok.</p>'+
+    '<button class="btn alt" data-a="kiriman">'+ic('box')+' Terima kiriman</button></div>';
   var ad = arrivals.filter(function(a){ return !a.used && hariIni(a.masuk) && a.outlet===S.outlet; });
   h += '<div class="card"><h3>Kasir berikutnya</h3>'+(ad.length ? ad.map(function(a){ return '<div class="kv"><span>✓ '+esc(a.nama)+' sudah absen datang</span><b>'+jam(a.masuk)+(a.telat?' · telat '+a.telat+' mnt':'')+'</b></div>'; }).join('') : '<p class="hint">Kalau kasir shift berikutnya sudah datang, absen dulu di sini walaupun serah terima uang nanti.</p>')+
     '<button class="btn alt" data-a="absendatang" style="margin-top:8px">🕒 Absen datang</button></div>';
@@ -923,7 +932,8 @@ var aturOpen = false;
 function viewAtur(){
   if(!aturOpen){ if(!pinCb && !pinPending){ pinPending = true; setTimeout(function(){ pinPending = false; askPin('Buka pengaturan', function(){ aturOpen = true; render(); }, function(){ ui.tab = 'kasir'; ui.forceAtur = false; render(); }); }, 0); }
     return '<p class="hint" style="text-align:center;margin-top:40px">Masukkan PIN pemilik…</p>'; }
-  var h = '<div class="card"><h3>Outlet & perangkat</h3><label class="f">Outlet HP ini</label><select class="inp" id="sOutlet">'+cfg.outlet.map(function(o){ return '<option'+(o===S.outlet?' selected':'')+'>'+esc(o)+'</option>'; }).join('')+'</select>'+
+  var h = '<button class="btn kuning" data-a="ownopen" style="margin-bottom:12px">'+ic('dash')+' Buka Mode Pemilik</button>';
+  h += '<div class="card"><h3>Outlet & perangkat</h3><label class="f">Outlet HP ini</label><select class="inp" id="sOutlet">'+cfg.outlet.map(function(o){ return '<option'+(o===S.outlet?' selected':'')+'>'+esc(o)+'</option>'; }).join('')+'</select>'+
     '<p class="muted">Kode HP: <b>'+esc(S.device)+'</b></p></div>';
   h += '<div class="card"><h3>Koneksi Google Sheet</h3><label class="f">URL Apps Script (Web App)</label><input class="inp" id="sUrl" placeholder="https://script.google.com/macros/s/.../exec" value="'+esc(S.url)+'">'+
     '<label class="f">Kunci koneksi (lihat tab Kasir Menu, sel H14)</label><input class="inp" id="sKey" value="'+esc(S.key)+'">'+
@@ -977,6 +987,170 @@ function renderSetup(){
   h += '<button class="btn" data-a="setupok" style="margin-top:18px" '+(S.outlet?'':'disabled')+'>Lanjut</button>';
   h += '<p class="muted">Mode demo: semua fitur bisa dicoba, data hanya tersimpan di HP ini. URL bisa diisi nanti di ⚙️ Atur.</p></div>';
   $('app').innerHTML = h;
+}
+
+
+/* =================== MODE PEMILIK =================== */
+function pemilikList(){ var p = karyawanAktif().filter(function(k){ return /pemilik/i.test(k.peran||''); }).map(function(k){ return k.nama; }); return p.length ? p : ['Dani','Agung']; }
+function lokasiList(){ return ['Gudang'].concat(cfg.outlet); }
+function bahanInfo(){ var bi = cfg.bahanInfo||[]; if(bi.length) return bi; return (cfg.bahan||[]).map(function(l){ return {label:l, jenis:'', topping:'', satuan:(l.match(/\(([^)]+)\)\s*$/)||[])[1]||''}; }); }
+function satuanDari(label){ return (String(label).match(/\(([^)]+)\)\s*$/)||[])[1]||''; }
+function angka(v){ v = String(v==null?'':v).trim().replace(/\s/g,''); if(v==='') return null; v = v.replace(/\./g,'').replace(',', '.'); var n = Number(v); return isNaN(n) ? NaN : n; }
+function angkaDes(v){ v = String(v==null?'':v).trim(); if(v==='') return null; var n = Number(v.replace(',', '.')); return isNaN(n) ? NaN : n; }
+function tglKey(offset){ var d = new Date(Date.now() + (offset||0)*86400000); return dKey(d); }
+function fetchOwner(){
+  if(!S.url){ ui.own.err = 'Mode demo: hubungkan ke Google Sheet dulu (Pengaturan).'; render(); return; }
+  ui.own.loading = true; ui.own.err = ''; render();
+  fetch(S.url + (S.url.indexOf('?')<0?'?':'&') + 'action=owner&key=' + encodeURIComponent(S.key) + '&pin=' + encodeURIComponent(cfg.pin||''), {method:'GET', redirect:'follow'})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(!j.ok) throw new Error(j.error||'ditolak'); ui.own.data = j.data; save('owndata', j.data); ui.own.loading = false; render(); })
+    .catch(function(e){ ui.own.loading = false; ui.own.err = e.message || 'tidak ada sinyal'; render(); });
+}
+function renderOwner(){
+  var o = ui.own, d = o.data;
+  var h = '<header><div class="logo">'+LOGO+'</div><div class="brand"><small>'+(o.loading?'Memuat data…':d?'Data per '+esc(d.waktu):'Belum ada data')+'</small><b>Mode Pemilik</b></div>'+
+    '<button class="hbtn" data-a="ownrefresh" aria-label="Muat ulang">'+ic('refresh')+'</button><button class="hbtn" data-a="ownclose" aria-label="Tutup">'+ic('close')+'</button></header>';
+  h += '<main>';
+  if(o.err) h += '<div class="card" style="border-color:var(--merah)"><b style="color:var(--merah)">Gagal memuat:</b> '+esc(o.err)+'<br><span class="muted">Data yang tampil adalah data terakhir yang tersimpan.</span></div>';
+  if(queue.length) h += '<p class="muted">'+queue.length+' data belum terkirim. Angka di bawah belum termasuk data itu.</p>';
+  h += ({dash:ownDash, stok:ownStok, absen:ownAbsen, belanja:ownBelanja}[o.tab])(d) + '</main>';
+  var tabs = [['dash','dash','Dashboard'],['stok','box','Stok'],['absen','shift','Absensi'],['belanja','cart','Belanja']];
+  h += '<nav>' + tabs.map(function(t){ return '<button data-a="owntab" data-v="'+t[0]+'" class="'+(o.tab===t[0]?'on':'')+'">'+ic(t[1])+t[2]+'</button>'; }).join('') + '</nav>';
+  $('app').innerHTML = h;
+}
+function ownDash(d){
+  var p = ui.own.period;
+  var h = '<div class="seg">'+[['hari','Hari ini'],['minggu','7 hari'],['bulan','Bulan ini']].map(function(x){ return '<button data-a="ownper" data-v="'+x[0]+'" class="'+(p===x[0]?'on':'')+'">'+x[1]+'</button>'; }).join('')+'</div>';
+  if(!d){ return h + '<p class="hint" style="text-align:center">Tekan tombol muat ulang di kanan atas.</p>'; }
+  (d.penjualan[p]||[]).forEach(function(r, i){
+    var mg = r.omzet ? Math.round(r.laba/r.omzet*100) : 0;
+    h += '<div class="card"'+(i===0?' style="background:var(--sel);border-color:#F3D9AE"':'')+'><div class="ch"><b>'+(i===0?'Semua outlet':esc(r.outlet))+'</b><span>'+num(r.trx)+' transaksi · '+num(r.pcs)+' pcs</span></div>'+
+      '<div style="font-size:24px;font-weight:800">'+rp(r.omzet)+'</div>'+
+      '<div class="kv" style="border:0;padding-bottom:0"><span>Laba kotor</span><b>'+rp(r.laba)+' <span class="muted">('+mg+'%)</span></b></div></div>';
+  });
+  var ps = d.pesanan||{};
+  h += '<div class="card"><h3>Pesanan acara bulan ini <span>'+num(ps.jumlah||0)+' selesai</span></h3><div class="kv"><span>Pendapatan</span><b>'+rp(ps.pendapatan)+'</b></div><div class="kv"><span>Laba</span><b>'+rp(ps.laba)+'</b></div>'+
+    ((ps.mendatang||[]).length ? '<p class="muted" style="margin:10px 0 4px">Akan datang</p>'+ps.mendatang.slice(0,5).map(function(m){ return '<div class="kv"><span>'+esc(m.tgl)+' · '+esc(m.nama)+'<br><small class="muted">'+esc(m.paket)+' · '+esc(m.status||'-')+'</small></span><b>'+(m.sisa?'sisa '+rp(m.sisa):'lunas')+'</b></div>'; }).join('') : '')+'</div>';
+  var low = (d.stok||[]).filter(function(s){ return s.status==='Menipis' || s.status==='Habis'; });
+  h += '<div class="card"><h3>Stok perlu belanja <span>'+low.length+' bahan</span></h3>'+(low.length ? low.map(function(s){ return '<div class="kv"><span>'+esc(s.label)+'</span><b style="color:'+(s.status==='Habis'?'var(--merah)':'var(--oranye)')+'">'+esc(s.status)+(s.habis?' · ±'+esc(s.habis)+' hari':'')+'</b></div>'; }).join('') : '<p class="hint">Semua aman.</p>')+'</div>';
+  return h;
+}
+function tagStatus(st){ var c = st==='Habis' ? 'batal' : st==='Menipis' ? 'lat' : st==='Aman' ? 'ok' : ''; return '<span class="tag '+c+'">'+esc(st||'-')+'</span>'; }
+function ownStok(d){
+  var h = '<div class="row" style="margin-bottom:12px"><button class="btn" data-a="hitung" style="flex:1">Hitung stok</button><button class="btn alt" data-a="kirimanown" style="flex:1">Catat kiriman</button></div>';
+  if(!d) return h + '<p class="hint" style="text-align:center">Tekan tombol muat ulang di kanan atas.</p>';
+  h += '<div class="card"><h3>Sisa stok total <span>gudang + semua outlet</span></h3>';
+  (d.stok||[]).forEach(function(s){ h += '<div class="kv"><span>'+esc(s.label.replace(/\s*\([^)]*\)\s*$/,''))+'<br><small class="muted">'+(s.habis?'habis ±'+esc(s.habis)+' hari':'')+(s.tgl?' · hitung '+esc(s.tgl):'')+'</small></span><b>'+esc(s.sisa||'0')+' '+esc(s.satuan)+' '+tagStatus(s.status)+'</b></div>'; });
+  h += '</div>';
+  h += '<div class="sec">Selisih pemakaian topping (seharusnya vs nyata)</div>';
+  (d.selisih||[]).forEach(function(l){
+    h += '<div class="card"><h3>'+esc(l.lokasi)+' <span>'+(l.dari?esc(l.dari)+' → '+esc(l.sampai):'')+'</span></h3>';
+    if(l.catatan) h += '<p class="hint">'+esc(l.catatan)+'</p>';
+    (l.rows||[]).forEach(function(r){
+      if(r.kurang){ h += '<div class="kv"><span>'+esc(r.topping)+'</span><b class="muted">belum dihitung di salah satu tanggal</b></div>'; return; }
+      var pc = r.persen, warna = pc===null ? 'var(--abu)' : Math.abs(pc)<=10 ? 'var(--hijau)' : 'var(--merah)';
+      h += '<div class="kv"><span>'+esc(r.topping)+'<br><small class="muted">seharusnya '+num(r.seharusnya)+' · nyata '+num(r.nyata)+' '+(r.satuan==='gram'?'g':esc(r.satuan))+'</small></span><b style="color:'+warna+'">'+(r.selisih>0?'+':'')+num(r.selisih)+(pc===null?'':' ('+(pc>0?'+':'')+String(pc).replace('.',',')+'%)')+'<br><small>'+(r.rp?(r.rp<0?'−':'+')+rp(Math.abs(r.rp)):'')+'</small></b></div>';
+    });
+    h += '</div>';
+  });
+  h += '<p class="muted">Plus = terpakai lebih banyak dari seharusnya (takaran berlebih, tumpah, tidak tercatat). Minus = lebih sedikit (porsi terlalu pelit). Wajar ±10%.</p>';
+  return h;
+}
+function ownAbsen(d){
+  if(!d) return '<p class="hint" style="text-align:center">Tekan tombol muat ulang di kanan atas.</p>';
+  var a = d.absen||{}, h = '<div class="card"><h3>Hari ini <span>'+(a.hariIni||[]).length+' shift</span></h3>';
+  h += (a.hariIni||[]).length ? a.hariIni.map(function(x){ return '<div class="kv"><span>'+esc(x.nama)+'<br><small class="muted">'+esc(x.outlet)+' · '+esc(x.shift||'')+'</small></span><b>'+esc(x.masuk)+(x.pulang?'–'+esc(x.pulang):' (masih jaga)')+(x.telat?'<br><small style="color:var(--merah)">telat '+x.telat+' mnt</small>':'')+'</b></div>'; }).join('') : '<p class="hint">Belum ada yang masuk.</p>';
+  h += '</div><div class="card"><h3>Bulan ini</h3>';
+  h += (a.bulan||[]).length ? a.bulan.map(function(x){ return '<div class="kv"><span>'+esc(x.nama)+'<br><small class="muted">'+x.shift+' shift · '+String(x.jam).replace('.',',')+' jam</small></span><b'+(x.telatKali?' style="color:var(--merah)"':'')+'>'+(x.telatKali?x.telatKali+'× telat · '+x.telatMenit+' mnt':'Tepat waktu')+'</b></div>'; }).join('') : '<p class="hint">Belum ada data.</p>';
+  return h + '</div>';
+}
+function ownBelanja(d){
+  var b = ui.bel || (ui.bel = {lokasi:'Gudang', metode:'Transfer'});
+  var kat = (cfg.kategori && cfg.kategori.length) ? cfg.kategori : DEFAULT_CFG.kategori;
+  var h = '<div class="card"><h3>Catat belanja <span>dibayar pemilik / transfer</span></h3>'+
+    '<label class="f">Tanggal</label><input class="inp" id="bTgl" type="date" value="'+tglKey(0)+'">'+
+    '<label class="f">Barang masuk ke</label><div class="seg" style="margin:0">'+lokasiList().map(function(l){ return '<button data-a="bellok" data-v="'+esc(l)+'" class="'+(b.lokasi===l?'on':'')+'">'+esc(l)+'</button>'; }).join('')+'</div>'+
+    '<label class="f">Kategori</label><select class="inp" id="bKat">'+kat.map(function(k){ return '<option>'+esc(k)+'</option>'; }).join('')+'</select>'+
+    '<label class="f">Bahan (untuk stok, kosongkan kalau bukan bahan)</label><select class="inp" id="bBahan"><option value="">— bukan bahan —</option>'+(cfg.bahan||[]).map(function(x){ return '<option>'+esc(x)+'</option>'; }).join('')+'</select>'+
+    '<label class="f">Jumlah (satuan di dalam kurung, desimal pakai koma)</label><input class="inp" id="bJml" inputmode="decimal" placeholder="mis. 2 atau 0,5">'+
+    '<label class="f">Keterangan</label><input class="inp" id="bKet" placeholder="mis. keju 2 kg di toko X">'+
+    '<label class="f">Nominal (Rp)</label><input class="inp" id="bNom" inputmode="numeric" placeholder="0">'+
+    '<label class="f">Dibayar oleh</label><select class="inp" id="bOleh">'+pemilikList().concat(['Kas Usaha']).map(function(n){ return '<option>'+esc(n)+'</option>'; }).join('')+'</select>'+
+    '<label class="f">Cara bayar</label><div class="seg" style="margin:0">'+['Tunai','Transfer','QRIS / e-wallet'].map(function(m){ return '<button data-a="belmet" data-v="'+esc(m)+'" class="'+(b.metode===m?'on':'')+'">'+esc(m.replace(' / e-wallet',''))+'</button>'; }).join('')+'</div>'+
+    '<button class="btn" data-a="belok" style="margin-top:14px">Simpan belanja</button>'+
+    '<p class="muted">Belanja pakai uang laci outlet dicatat kasir di aplikasi (Shift → Pengeluaran), jangan dicatat dua kali di sini.</p></div>';
+  if(d && (d.belanja||[]).length){
+    h += '<div class="card"><h3>Pengeluaran terakhir</h3>'+d.belanja.map(function(x){ return '<div class="kv"><span>'+esc(x.tgl)+' · '+esc(x.ket||x.kategori)+'<br><small class="muted">'+esc(x.lokasi)+(x.bahan?' · '+esc(x.bahan)+' '+esc(String(x.jumlah).replace('.',',')):'')+'</small></span><b>'+rp(x.nominal)+'</b></div>'; }).join('')+'</div>';
+  }
+  return h;
+}
+function belanjaOk(){
+  var b = ui.bel, nom = digits(($('bNom')||{}).value), ket = (($('bKet')||{}).value||'').trim(), bahan = ($('bBahan')||{}).value||'', jml = angkaDes(($('bJml')||{}).value);
+  if(!nom){ toast('Isi nominalnya'); return; }
+  if(!ket){ toast('Isi keterangannya'); return; }
+  if(bahan && (!jml || isNaN(jml))){ toast('Isi jumlah bahannya (desimal pakai koma)'); return; }
+  var id = 'BLJ-'+S.device+'-'+Date.now().toString(36).toUpperCase();
+  queue.push({type:'belanja', uid:id, id:id, time:new Date().toISOString(), tanggal:($('bTgl')||{}).value||tglKey(0), lokasi:b.lokasi, kategori:($('bKat')||{}).value,
+    keterangan:ket, nominal:nom, oleh:($('bOleh')||{}).value, metode:b.metode, bahan:bahan, jumlah:bahan?jml:''});
+  save('queue', queue);
+  ['bNom','bKet','bJml'].forEach(function(i){ var e=$(i); if(e) e.value=''; }); var bb=$('bBahan'); if(bb) bb.value='';
+  toast('Belanja '+rp(nom)+' tersimpan'); syncNow(); setTimeout(fetchOwner, 4000);
+}
+/* Hitung stok per lokasi */
+function openHitung(){
+  var hs = ui.hit || (ui.hit = {lokasi:'Gudang', waktu:'tutup', semua:false});
+  var list = bahanInfo().filter(function(b){ return hs.lokasi==='Gudang' || hs.semua || b.topping; });
+  var h = '<div class="sheet"><h2>Hitung stok</h2>'+
+    '<label class="f">Lokasi</label><div class="seg" style="margin:0">'+lokasiList().map(function(l){ return '<button data-a="hitlok" data-v="'+esc(l)+'" class="'+(hs.lokasi===l?'on':'')+'">'+esc(l)+'</button>'; }).join('')+'</div>'+
+    '<label class="f">Kapan dihitung?</label><div class="seg" style="margin:0"><button data-a="hitwkt" data-v="tutup" class="'+(hs.waktu==='tutup'?'on':'')+'">Setelah tutup<br><small style="font-weight:500">tanggal '+tglTampil(new Date())+'</small></button><button data-a="hitwkt" data-v="buka" class="'+(hs.waktu==='buka'?'on':'')+'">Sebelum buka<br><small style="font-weight:500">tanggal '+tglTampil(new Date(Date.now()-86400000))+'</small></button></div>'+
+    '<label class="f">Dihitung oleh</label><select class="inp" id="hOleh">'+pemilikList().map(function(n){ return '<option>'+esc(n)+'</option>'; }).join('')+'</select>'+
+    '<p class="muted" style="margin-top:12px">Isi jumlah fisik dalam satuan di kanan (desimal pakai koma). Isi <b>0</b> kalau habis. Kosong = tidak dihitung.</p>';
+  list.forEach(function(b, i){ h += '<div class="kv" style="align-items:center"><span>'+esc(b.label.replace(/\s*\([^)]*\)\s*$/,''))+'</span><span style="display:flex;align-items:center;gap:6px"><input class="inp" id="hq'+i+'" data-l="'+esc(b.label)+'" inputmode="decimal" style="width:96px;padding:9px 10px;text-align:right"><small class="muted" style="width:38px">'+esc(satuanDari(b.label))+'</small></span></div>'; });
+  if(hs.lokasi!=='Gudang') h += '<label class="sw" style="border:0"><span>Tampilkan semua bahan (bukan hanya topping)</span><input type="checkbox" id="hSemua" '+(hs.semua?'checked':'')+'></label>';
+  h += '<button class="btn" data-a="hitok" style="margin-top:12px">Simpan hitung stok</button><button class="btn alt" data-a="close" style="margin-top:8px">Batal</button></div>';
+  sheet(h);
+  var cb = $('hSemua'); if(cb) cb.addEventListener('change', function(){ hs.semua = cb.checked; openHitung(); });
+}
+function hitungOk(){
+  var hs = ui.hit, tgl = hs.waktu==='buka' ? tglKey(-1) : tglKey(0), oleh = ($('hOleh')||{}).value, recs = [], bad = false;
+  Array.prototype.forEach.call(document.querySelectorAll('[id^="hq"]'), function(inp){
+    var v = angkaDes(inp.value); if(v===null) return; if(isNaN(v) || v<0){ bad = true; return; }
+    var id = 'HIT-'+S.device+'-'+Date.now().toString(36).toUpperCase()+'-'+recs.length;
+    recs.push({type:'hitung', uid:id, id:id, time:new Date().toISOString(), tanggal:tgl, bahan:inp.getAttribute('data-l'), jumlah:v, oleh:oleh, lokasi:hs.lokasi});
+  });
+  if(bad){ toast('Ada angka yang salah. Desimal pakai koma, mis. 0,25'); return; }
+  if(!recs.length){ toast('Belum ada angka yang diisi'); return; }
+  queue = queue.concat(recs); save('queue', queue); closeSheet();
+  toast(recs.length+' bahan di '+hs.lokasi+' tersimpan'); syncNow(); setTimeout(fetchOwner, 5000);
+}
+/* Kiriman gudang -> outlet */
+function openKiriman(dariPemilik){
+  var k = ui.kir || (ui.kir = {lines:3});
+  k.pemilik = !!dariPemilik; if(!k.ke) k.ke = S.outlet;
+  var opts = '<option value="">— pilih bahan —</option>'+bahanInfo().map(function(b){ return '<option>'+esc(b.label)+'</option>'; }).join('');
+  var h = '<div class="sheet"><h2>'+(k.pemilik?'Catat kiriman ke outlet':'Terima kiriman dari gudang')+'</h2>';
+  if(k.pemilik) h += '<label class="f">Dikirim ke</label><div class="seg" style="margin:0">'+cfg.outlet.map(function(o){ return '<button data-a="kirke" data-v="'+esc(o)+'" class="'+(k.ke===o?'on':'')+'">'+esc(o)+'</button>'; }).join('')+'</div>';
+  else h += '<p class="muted">Outlet: <b>'+esc(S.outlet)+'</b> · dicatat '+esc(shift?shift.kasir:'')+'</p>';
+  h += '<p class="muted" style="margin-top:10px">Jumlah dalam satuan di dalam kurung (desimal pakai koma). Contoh: keju 500 g = 0,5.</p>';
+  for(var i=0;i<k.lines;i++) h += '<div class="row" style="margin-top:8px"><select class="inp" id="kb'+i+'" style="flex:2">'+opts+'</select><input class="inp" id="kj'+i+'" inputmode="decimal" placeholder="jumlah" style="flex:1"></div>';
+  h += '<button class="mini" data-a="kirbaris" style="margin-top:10px">＋ Tambah baris</button>';
+  if(k.pemilik) h += '<label class="f">Dicatat oleh</label><select class="inp" id="kOleh">'+pemilikList().map(function(n){ return '<option>'+esc(n)+'</option>'; }).join('')+'</select>';
+  h += '<button class="btn" data-a="kirok" style="margin-top:14px">Simpan kiriman</button><button class="btn alt" data-a="close" style="margin-top:8px">Batal</button></div>';
+  sheet(h);
+}
+function kirimanOk(){
+  var k = ui.kir, recs = [], bad = false, ke = k.pemilik ? k.ke : S.outlet, oleh = k.pemilik ? ($('kOleh')||{}).value : (shift?shift.kasir:'');
+  for(var i=0;i<k.lines;i++){
+    var b = ($('kb'+i)||{}).value, j = angkaDes(($('kj'+i)||{}).value);
+    if(!b && j===null) continue;
+    if(!b || j===null || isNaN(j) || j<=0){ bad = true; continue; }
+    var id = 'KRM-'+S.device+'-'+Date.now().toString(36).toUpperCase()+'-'+i;
+    recs.push({type:'kiriman', uid:id, id:id, time:new Date().toISOString(), tanggal:tglKey(0), ke:ke, bahan:b, jumlah:j, oleh:oleh, status:(!k.pemilik && S.latihan)?'Latihan':'OK'});
+  }
+  if(bad){ toast('Lengkapi bahan dan jumlahnya (desimal pakai koma)'); return; }
+  if(!recs.length){ toast('Belum ada bahan yang diisi'); return; }
+  queue = queue.concat(recs); save('queue', queue); k.lines = 3; closeSheet();
+  toast('Kiriman ke '+ke+' tercatat ('+recs.length+' bahan)'); render(); syncNow();
 }
 
 /* =================== PIN & SHEET =================== */
@@ -1054,6 +1228,24 @@ document.addEventListener('click', function(e){
     case 'unslot': ui.racik.splice(idx,1); if(!ui.racik.length) ui.qty = 1; render(); break;
     case 'eye': ui.showOmzet = !ui.showOmzet; clearTimeout(ui.eyeT); if(ui.showOmzet) ui.eyeT = setTimeout(function(){ ui.showOmzet = false; if(ui.tab==='kasir' && shift) render(); }, 8000); render(); break;
     case 'mdaftar2': ui.mctx = 'tab'; openDaftarMember(); break;
+    case 'ownopen': ui.own.open = true; ui.own.tab = 'dash'; aturOpen = false; ui.forceAtur = false; render(); fetchOwner(); break;
+    case 'ownclose': ui.own.open = false; ui.tab = 'kasir'; render(); break;
+    case 'ownrefresh': fetchOwner(); break;
+    case 'owntab': ui.own.tab = v; render(); if(!ui.own.data) fetchOwner(); break;
+    case 'ownper': ui.own.period = v; render(); break;
+    case 'hitung': openHitung(); break;
+    case 'hitlok': ui.hit.lokasi = v; openHitung(); break;
+    case 'hitwkt': ui.hit.waktu = v; openHitung(); break;
+    case 'hitok': hitungOk(); break;
+    case 'kiriman': ui.kir = {lines:3}; openKiriman(false); break;
+    case 'kirimanown': ui.kir = {lines:3}; openKiriman(true); break;
+    case 'kirke': ui.kir.ke = v; openKiriman(true); break;
+    case 'kirbaris': var keep = []; for(var q=0;q<ui.kir.lines;q++) keep.push([($('kb'+q)||{}).value, ($('kj'+q)||{}).value]); ui.kir.lines++; openKiriman(ui.kir.pemilik);
+      keep.forEach(function(x, q){ var a=$('kb'+q), b2=$('kj'+q); if(a) a.value = x[0]; if(b2) b2.value = x[1]; }); break;
+    case 'kirok': kirimanOk(); break;
+    case 'bellok': ui.bel.lokasi = v; render(); break;
+    case 'belmet': ui.bel.metode = v; render(); break;
+    case 'belok': belanjaOk(); break;
     case 'qty': ui.qty = Math.max(1, ui.qty + Number(v)); render(); break;
     case 'setqty': ui.qty = Number(v); render(); break;
     case 'clearracik': ui.racik = []; ui.qty = 1; render(); break;
