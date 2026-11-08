@@ -159,7 +159,7 @@ var DEFAULT_CFG = {
   bahan: [],
   bahanInfo: []
 };
-var APP_VERSI = '3.2';
+var APP_VERSI = '3.3';
 var CFG_KEYS = ['karyawan','jadwal','kategori','batasKeluar','toleransi','member','members','biaya','bahan','bahanInfo'];
 
 var cfg = load('cfg', DEFAULT_CFG);
@@ -1037,24 +1037,71 @@ function ownDash(d){
 }
 function tagStatus(st){ var c = st==='Habis' ? 'batal' : st==='Menipis' ? 'lat' : st==='Aman' ? 'ok' : ''; return '<span class="tag '+c+'">'+esc(st||'-')+'</span>'; }
 function ownStok(d){
-  var h = '<div class="row" style="margin-bottom:12px"><button class="btn" data-a="hitung" style="flex:1">Hitung stok</button><button class="btn alt" data-a="kirimanown" style="flex:1">Catat kiriman</button></div>';
+  var h = '<div class="row" style="margin-bottom:8px"><button class="btn" data-a="hitung" style="flex:1">Hitung stok</button><button class="btn alt" data-a="kirimanown" style="flex:1">Pindah stok</button></div>'+
+    '<button class="btn kuning" data-a="bawa" style="margin-bottom:12px">Bawa & kembali (CFD / pesanan)</button>';
   if(!d) return h + '<p class="hint" style="text-align:center">Tekan tombol muat ulang di kanan atas.</p>';
   h += '<div class="card"><h3>Sisa stok total <span>gudang + semua outlet</span></h3>';
   (d.stok||[]).forEach(function(s){ h += '<div class="kv"><span>'+esc(s.label.replace(/\s*\([^)]*\)\s*$/,''))+'<br><small class="muted">'+(s.habis?'habis ±'+esc(s.habis)+' hari':'')+(s.tgl?' · hitung '+esc(s.tgl):'')+'</small></span><b>'+esc(s.sisa||'0')+' '+esc(s.satuan)+' '+tagStatus(s.status)+'</b></div>'; });
   h += '</div>';
   h += '<div class="sec">Selisih pemakaian topping (seharusnya vs nyata)</div>';
   (d.selisih||[]).forEach(function(l){
-    h += '<div class="card"><h3>'+esc(l.lokasi)+' <span>'+(l.dari?esc(l.dari)+' → '+esc(l.sampai):'')+'</span></h3>';
+    h += '<div class="card"><h3>'+esc(l.judul||l.lokasi)+' <span>'+(l.dari?esc(l.dari)+' → '+esc(l.sampai):'')+'</span></h3>';
     if(l.catatan) h += '<p class="hint">'+esc(l.catatan)+'</p>';
-    (l.rows||[]).forEach(function(r){
-      if(r.kurang){ h += '<div class="kv"><span>'+esc(r.topping)+'</span><b class="muted">belum dihitung di salah satu tanggal</b></div>'; return; }
-      var pc = r.persen, warna = pc===null ? 'var(--abu)' : Math.abs(pc)<=10 ? 'var(--hijau)' : 'var(--merah)';
-      h += '<div class="kv"><span>'+esc(r.topping)+'<br><small class="muted">seharusnya '+num(r.seharusnya)+' · nyata '+num(r.nyata)+' '+(r.satuan==='gram'?'g':esc(r.satuan))+'</small></span><b style="color:'+warna+'">'+(r.selisih>0?'+':'')+num(r.selisih)+(pc===null?'':' ('+(pc>0?'+':'')+String(pc).replace('.',',')+'%)')+'<br><small>'+(r.rp?(r.rp<0?'−':'+')+rp(Math.abs(r.rp)):'')+'</small></b></div>';
-    });
+    (l.harian||[]).forEach(function(hr){ h += '<p class="muted" style="margin:10px 0 2px;font-weight:700">'+esc(hr.tgl)+'</p>'+(hr.rows.length?'':'<p class="hint">Tidak ada topping tercatat.</p>')+hr.rows.map(barisSelisih).join(''); });
+    (l.rows||[]).forEach(function(r){ h += barisSelisih(r); });
     h += '</div>';
   });
   h += '<p class="muted">Plus = terpakai lebih banyak dari seharusnya (takaran berlebih, tumpah, tidak tercatat). Minus = lebih sedikit (porsi terlalu pelit). Wajar ±10%.</p>';
   return h;
+}
+function barisSelisih(r){
+  if(r.kurang) return '<div class="kv"><span>'+esc(r.topping)+'</span><b class="muted">belum dihitung di salah satu tanggal</b></div>';
+  var pc = r.persen, warna = pc===null ? 'var(--abu)' : Math.abs(pc)<=10 ? 'var(--hijau)' : 'var(--merah)';
+  return '<div class="kv"><span>'+esc(r.topping)+'<br><small class="muted">seharusnya '+num(r.seharusnya)+' · nyata '+num(r.nyata)+' '+(r.satuan==='gram'?'g':esc(r.satuan))+'</small></span><b style="color:'+warna+'">'+(r.selisih>0?'+':'')+num(r.selisih)+(pc===null?'':' ('+(pc>0?'+':'')+String(pc).replace('.',',')+'%)')+'<br><small>'+(r.rp?(r.rp<0?'−':'+')+rp(Math.abs(r.rp)):'')+'</small></b></div>';
+}
+/* Bawa & kembali: CFD dan pesanan acara */
+function lokasiAcara(){ return cfg.outlet.filter(function(o){ return /cfd|bazar|event|acara/i.test(o); }).concat(['Pesanan']); }
+function lokasiStok(){ var ac = lokasiAcara(); return ['Gudang'].concat(cfg.outlet.filter(function(o){ return ac.indexOf(o)<0; })); }
+function pesananPilih(){ var d = ui.own.data; return (d && d.pesanan && d.pesanan.pilih) || []; }
+function pilihPesananHtml(id, val){
+  var ps = pesananPilih();
+  return '<label class="f">Pesanan yang mana?</label><select class="inp" id="'+id+'"><option value="">— tanpa kode (cocokkan dengan tanggal) —</option>'+
+    ps.map(function(p){ return '<option value="'+esc(p.kode)+'"'+(val===p.kode?' selected':'')+'>'+esc(p.kode+' · '+p.tgl+' · '+p.nama+' · '+p.paket)+'</option>'; }).join('')+'</select>'+
+    (ps.length?'':'<p class="muted">Daftar pesanan muncul setelah data Mode Pemilik dimuat (tombol ↻).</p>');
+}
+function openBawa(){
+  var bw = ui.bawa || (ui.bawa = {lokasi:lokasiAcara()[0], dari:'Gudang'});
+  var list = bahanInfo().filter(function(b){ return b.topping; });
+  var h = '<div class="sheet"><h2>Bawa & kembali</h2><p class="muted">Isi setelah selesai jualan/acara. Timbang yang dibawa dan sisanya; sisa dikembalikan ke tempat asalnya.</p>'+
+    '<label class="f">Untuk</label><div class="seg" style="margin:0">'+lokasiAcara().map(function(l){ return '<button data-a="bawalok" data-v="'+esc(l)+'" class="'+(bw.lokasi===l?'on':'')+'">'+esc(l==='Pesanan'?'Pesanan acara':l)+'</button>'; }).join('')+'</div>'+
+    '<label class="f">Diambil dari (sisa dikembalikan ke sini)</label><div class="seg" style="margin:0">'+lokasiStok().map(function(l){ return '<button data-a="bawadari" data-v="'+esc(l)+'" class="'+(bw.dari===l?'on':'')+'">'+esc(l)+'</button>'; }).join('')+'</div>'+
+    (bw.lokasi==='Pesanan' ? pilihPesananHtml('wKode', bw.kode) : '')+
+    '<label class="f">Tanggal jualan / acara</label><input class="inp" id="wTgl" type="date" value="'+(bw.tgl||tglKey(0))+'">'+
+    '<label class="f">Dicatat oleh</label><select class="inp" id="wOleh">'+pemilikList().map(function(n){ return '<option>'+esc(n)+'</option>'; }).join('')+'</select>'+
+    '<div class="kv" style="margin-top:12px"><span class="muted">Topping (satuan)</span><span class="muted" style="display:flex;gap:6px"><span style="width:80px;text-align:center">Dibawa</span><span style="width:80px;text-align:center">Kembali</span></span></div>';
+  list.forEach(function(b, i){ h += '<div class="kv" style="align-items:center"><span>'+esc(b.topping)+' <small class="muted">'+esc(satuanDari(b.label))+'</small></span><span style="display:flex;gap:6px">'+
+    '<input class="inp" id="wb'+i+'" data-l="'+esc(b.label)+'" inputmode="decimal" style="width:80px;padding:9px 8px;text-align:right">'+
+    '<input class="inp" id="wk'+i+'" inputmode="decimal" placeholder="0" style="width:80px;padding:9px 8px;text-align:right"></span></div>'; });
+  h += '<p class="muted">Desimal pakai koma (0,45). Topping yang tidak dibawa dikosongkan.</p>'+
+    '<button class="btn" data-a="bawaok" style="margin-top:8px">Simpan</button><button class="btn alt" data-a="close" style="margin-top:8px">Batal</button></div>';
+  sheet(h);
+}
+function bawaOk(){
+  var bw = ui.bawa, tgl = ($('wTgl')||{}).value || tglKey(0), oleh = ($('wOleh')||{}).value, kode = bw.lokasi==='Pesanan' ? (($('wKode')||{}).value||'') : '', recs = [], salah = '';
+  Array.prototype.forEach.call(document.querySelectorAll('[id^="wb"]'), function(inp){
+    var i = inp.id.slice(2), bawa = angkaDes(inp.value), kembali = angkaDes(($('wk'+i)||{}).value);
+    if(bawa===null && kembali===null) return;
+    if(bawa===null || isNaN(bawa) || (kembali!==null && isNaN(kembali))){ salah = 'Ada angka yang salah. Desimal pakai koma, mis. 0,45'; return; }
+    kembali = kembali || 0;
+    if(kembali > bawa){ salah = 'Jumlah kembali tidak boleh lebih besar dari yang dibawa'; return; }
+    var id = 'BWK-'+S.device+'-'+Date.now().toString(36).toUpperCase()+'-'+i;
+    recs.push({type:'kiriman', uid:id, id:id, time:new Date().toISOString(), tanggal:tgl, ke:bw.lokasi, dari:bw.dari||'Gudang', kode:kode, bahan:inp.getAttribute('data-l'),
+      jumlah:Math.round((bawa-kembali)*10000)/10000, oleh:oleh, status:'OK', catatan:'dibawa '+String(bawa).replace('.',',')+', kembali '+String(kembali).replace('.',',')});
+  });
+  if(salah){ toast(salah); return; }
+  if(!recs.length){ toast('Belum ada topping yang diisi'); return; }
+  queue = queue.concat(recs); save('queue', queue); closeSheet();
+  toast('Bawa & kembali '+(bw.lokasi==='Pesanan'?'pesanan':bw.lokasi)+' tersimpan ('+recs.length+' topping)'); syncNow(); setTimeout(fetchOwner, 5000);
 }
 function ownAbsen(d){
   if(!d) return '<p class="hint" style="text-align:center">Tekan tombol muat ulang di kanan atas.</p>';
@@ -1101,7 +1148,7 @@ function openHitung(){
   var hs = ui.hit || (ui.hit = {lokasi:'Gudang', waktu:'tutup', semua:false});
   var list = bahanInfo().filter(function(b){ return hs.lokasi==='Gudang' || hs.semua || b.topping; });
   var h = '<div class="sheet"><h2>Hitung stok</h2>'+
-    '<label class="f">Lokasi</label><div class="seg" style="margin:0">'+lokasiList().map(function(l){ return '<button data-a="hitlok" data-v="'+esc(l)+'" class="'+(hs.lokasi===l?'on':'')+'">'+esc(l)+'</button>'; }).join('')+'</div>'+
+    '<label class="f">Lokasi</label><div class="seg" style="margin:0">'+lokasiStok().map(function(l){ return '<button data-a="hitlok" data-v="'+esc(l)+'" class="'+(hs.lokasi===l?'on':'')+'">'+esc(l)+'</button>'; }).join('')+'</div>'+
     '<label class="f">Kapan dihitung?</label><div class="seg" style="margin:0"><button data-a="hitwkt" data-v="tutup" class="'+(hs.waktu==='tutup'?'on':'')+'">Setelah tutup<br><small style="font-weight:500">tanggal '+tglTampil(new Date())+'</small></button><button data-a="hitwkt" data-v="buka" class="'+(hs.waktu==='buka'?'on':'')+'">Sebelum buka<br><small style="font-weight:500">tanggal '+tglTampil(new Date(Date.now()-86400000))+'</small></button></div>'+
     '<label class="f">Dihitung oleh</label><select class="inp" id="hOleh">'+pemilikList().map(function(n){ return '<option>'+esc(n)+'</option>'; }).join('')+'</select>'+
     '<p class="muted" style="margin-top:12px">Isi jumlah fisik dalam satuan di kanan (desimal pakai koma). Isi <b>0</b> kalau habis. Kosong = tidak dihitung.</p>';
@@ -1123,34 +1170,46 @@ function hitungOk(){
   queue = queue.concat(recs); save('queue', queue); closeSheet();
   toast(recs.length+' bahan di '+hs.lokasi+' tersimpan'); syncNow(); setTimeout(fetchOwner, 5000);
 }
-/* Kiriman gudang -> outlet */
+/* Kiriman gudang -> outlet (kasir) dan pindah stok antar lokasi (pemilik) */
 function openKiriman(dariPemilik){
   var k = ui.kir || (ui.kir = {lines:3});
-  k.pemilik = !!dariPemilik; if(!k.ke) k.ke = S.outlet;
+  k.pemilik = !!dariPemilik;
+  var semua = lokasiStok().concat(lokasiAcara());
+  if(!k.dari) k.dari = 'Gudang';
+  if(!k.ke) k.ke = cfg.outlet.filter(function(o){ return o!==k.dari; })[0] || S.outlet;
   var opts = '<option value="">— pilih bahan —</option>'+bahanInfo().map(function(b){ return '<option>'+esc(b.label)+'</option>'; }).join('');
-  var h = '<div class="sheet"><h2>'+(k.pemilik?'Catat kiriman ke outlet':'Terima kiriman dari gudang')+'</h2>';
-  if(k.pemilik) h += '<label class="f">Dikirim ke</label><div class="seg" style="margin:0">'+cfg.outlet.map(function(o){ return '<button data-a="kirke" data-v="'+esc(o)+'" class="'+(k.ke===o?'on':'')+'">'+esc(o)+'</button>'; }).join('')+'</div>';
-  else h += '<p class="muted">Outlet: <b>'+esc(S.outlet)+'</b> · dicatat '+esc(shift?shift.kasir:'')+'</p>';
+  var h = '<div class="sheet"><h2>'+(k.pemilik?'Pindah stok':'Terima kiriman dari gudang')+'</h2>';
+  if(k.pemilik){
+    h += '<label class="f">Dari</label><div class="seg" style="margin:0;flex-wrap:wrap">'+semua.map(function(o){ return '<button data-a="kirdari" data-v="'+esc(o)+'" class="'+(k.dari===o?'on':'')+'">'+esc(o)+'</button>'; }).join('')+'</div>'+
+      '<label class="f">Ke</label><div class="seg" style="margin:0;flex-wrap:wrap">'+semua.map(function(o){ return '<button data-a="kirke" data-v="'+esc(o)+'" class="'+(k.ke===o?'on':'')+'">'+esc(o)+'</button>'; }).join('')+'</div>';
+    if(k.dari==='Pesanan' || k.ke==='Pesanan') h += pilihPesananHtml('kKode', k.kode);
+    h += '<label class="f">Tanggal</label><input class="inp" id="kTgl" type="date" value="'+(k.tgl||tglKey(0))+'">'+
+      '<p class="muted" style="margin-top:10px">Untuk CFD dan pesanan lebih mudah pakai tombol <b>Bawa & kembali</b>.</p>';
+  } else h += '<p class="muted">Outlet: <b>'+esc(S.outlet)+'</b> · dicatat '+esc(shift?shift.kasir:'')+'</p>';
   h += '<p class="muted" style="margin-top:10px">Jumlah dalam satuan di dalam kurung (desimal pakai koma). Contoh: keju 500 g = 0,5.</p>';
   for(var i=0;i<k.lines;i++) h += '<div class="row" style="margin-top:8px"><select class="inp" id="kb'+i+'" style="flex:2">'+opts+'</select><input class="inp" id="kj'+i+'" inputmode="decimal" placeholder="jumlah" style="flex:1"></div>';
   h += '<button class="mini" data-a="kirbaris" style="margin-top:10px">＋ Tambah baris</button>';
   if(k.pemilik) h += '<label class="f">Dicatat oleh</label><select class="inp" id="kOleh">'+pemilikList().map(function(n){ return '<option>'+esc(n)+'</option>'; }).join('')+'</select>';
-  h += '<button class="btn" data-a="kirok" style="margin-top:14px">Simpan kiriman</button><button class="btn alt" data-a="close" style="margin-top:8px">Batal</button></div>';
+  h += '<button class="btn" data-a="kirok" style="margin-top:14px">'+(k.pemilik?'Simpan pindah stok':'Simpan kiriman')+'</button><button class="btn alt" data-a="close" style="margin-top:8px">Batal</button></div>';
   sheet(h);
 }
+function simpanIsiKiriman(){ var keep = []; for(var q=0;q<ui.kir.lines;q++) keep.push([($('kb'+q)||{}).value, ($('kj'+q)||{}).value]); ui.kir.isi = keep; ui.kir.tgl = ($('kTgl')||{}).value || ui.kir.tgl; ui.kir.kode = ($('kKode')||{}).value || ui.kir.kode; }
+function pulihkanIsiKiriman(){ (ui.kir.isi||[]).forEach(function(x, q){ var a=$('kb'+q), b2=$('kj'+q); if(a) a.value = x[0]; if(b2) b2.value = x[1]; }); }
 function kirimanOk(){
-  var k = ui.kir, recs = [], bad = false, ke = k.pemilik ? k.ke : S.outlet, oleh = k.pemilik ? ($('kOleh')||{}).value : (shift?shift.kasir:'');
+  var k = ui.kir, recs = [], bad = false, ke = k.pemilik ? k.ke : S.outlet, dari = k.pemilik ? k.dari : 'Gudang', oleh = k.pemilik ? ($('kOleh')||{}).value : (shift?shift.kasir:'');
+  var tgl = k.pemilik ? (($('kTgl')||{}).value || tglKey(0)) : tglKey(0), kode = (k.pemilik && (ke==='Pesanan' || dari==='Pesanan')) ? (($('kKode')||{}).value||'') : '';
+  if(dari===ke){ toast('Lokasi asal dan tujuan tidak boleh sama'); return; }
   for(var i=0;i<k.lines;i++){
     var b = ($('kb'+i)||{}).value, j = angkaDes(($('kj'+i)||{}).value);
     if(!b && j===null) continue;
     if(!b || j===null || isNaN(j) || j<=0){ bad = true; continue; }
     var id = 'KRM-'+S.device+'-'+Date.now().toString(36).toUpperCase()+'-'+i;
-    recs.push({type:'kiriman', uid:id, id:id, time:new Date().toISOString(), tanggal:tglKey(0), ke:ke, bahan:b, jumlah:j, oleh:oleh, status:(!k.pemilik && S.latihan)?'Latihan':'OK'});
+    recs.push({type:'kiriman', uid:id, id:id, time:new Date().toISOString(), tanggal:tgl, ke:ke, dari:dari, kode:kode, bahan:b, jumlah:j, oleh:oleh, status:(!k.pemilik && S.latihan)?'Latihan':'OK'});
   }
   if(bad){ toast('Lengkapi bahan dan jumlahnya (desimal pakai koma)'); return; }
   if(!recs.length){ toast('Belum ada bahan yang diisi'); return; }
   queue = queue.concat(recs); save('queue', queue); k.lines = 3; closeSheet();
-  toast('Kiriman ke '+ke+' tercatat ('+recs.length+' bahan)'); render(); syncNow();
+  toast((k.pemilik?dari+' → ':'Kiriman ke ')+ke+' tercatat ('+recs.length+' bahan)'); render(); syncNow(); if(k.pemilik) setTimeout(fetchOwner, 5000);
 }
 
 /* =================== PIN & SHEET =================== */
@@ -1237,11 +1296,15 @@ document.addEventListener('click', function(e){
     case 'hitlok': ui.hit.lokasi = v; openHitung(); break;
     case 'hitwkt': ui.hit.waktu = v; openHitung(); break;
     case 'hitok': hitungOk(); break;
+    case 'bawa': openBawa(); break;
+    case 'bawalok': ui.bawa.tgl = ($('wTgl')||{}).value; ui.bawa.lokasi = v; openBawa(); break;
+    case 'bawadari': ui.bawa.tgl = ($('wTgl')||{}).value; ui.bawa.kode = ($('wKode')||{}).value; ui.bawa.dari = v; openBawa(); break;
+    case 'bawaok': bawaOk(); break;
     case 'kiriman': ui.kir = {lines:3}; openKiriman(false); break;
     case 'kirimanown': ui.kir = {lines:3}; openKiriman(true); break;
-    case 'kirke': ui.kir.ke = v; openKiriman(true); break;
-    case 'kirbaris': var keep = []; for(var q=0;q<ui.kir.lines;q++) keep.push([($('kb'+q)||{}).value, ($('kj'+q)||{}).value]); ui.kir.lines++; openKiriman(ui.kir.pemilik);
-      keep.forEach(function(x, q){ var a=$('kb'+q), b2=$('kj'+q); if(a) a.value = x[0]; if(b2) b2.value = x[1]; }); break;
+    case 'kirke': simpanIsiKiriman(); ui.kir.ke = v; openKiriman(true); pulihkanIsiKiriman(); break;
+    case 'kirdari': simpanIsiKiriman(); ui.kir.dari = v; openKiriman(true); pulihkanIsiKiriman(); break;
+    case 'kirbaris': simpanIsiKiriman(); ui.kir.lines++; openKiriman(ui.kir.pemilik); pulihkanIsiKiriman(); break;
     case 'kirok': kirimanOk(); break;
     case 'bellok': ui.bel.lokasi = v; render(); break;
     case 'belmet': ui.bel.metode = v; render(); break;
