@@ -166,7 +166,7 @@ var DEFAULT_CFG = {
   bahan: [],
   bahanInfo: []
 };
-var APP_VERSI = '3.6';
+var APP_VERSI = '3.7';
 var CFG_KEYS = ['karyawan','jadwal','kategori','batasKeluar','toleransi','member','members','biaya','bahan','bahanInfo'];
 
 var cfg = load('cfg', DEFAULT_CFG);
@@ -276,6 +276,7 @@ function cartTotals(){
 
 /* =================== RENDER UTAMA =================== */
 function render(){
+  aturLayar();
   var keep = {}, act = document.activeElement && document.activeElement.id;
   Array.prototype.forEach.call(document.querySelectorAll('#app input[id], #app select[id]'), function(i){ keep[i.id] = i.type==='checkbox' ? i.checked : i.value; });
   renderInner();
@@ -646,6 +647,117 @@ function beep(kali, jenis){
   try{ if(navigator.vibrate) navigator.vibrate([220,120,220]); }catch(e){}
 }
 document.addEventListener('click', function(){ try{ AC = AC || new (window.AudioContext || window.webkitAudioContext)(); if(AC.state==='suspended') AC.resume(); }catch(e){} }, true);
+var SUARA = [['lonceng','Lonceng Victory'],['marimba','Marimba Lekker'],['kring','Kring Toko'],['fanfare','Fanfare Victory'],['dani','Suara Lekker Victory (pesanan online)'],['bip','Bip (lama)']];
+function suaraOnl(){ var n = S.suaraOnl || 'lonceng'; return SUARA.some(function(x){ return x[0]===n; }) ? n : 'lonceng'; }
+var bufSuara = {};
+function putarSuara(nama, cb){
+  var gagal = function(){ beep(3); cb && cb(1.2); };
+  if(nama==='bip') return gagal();
+  try{ AC = AC || new (window.AudioContext || window.webkitAudioContext)(); if(AC.state==='suspended') AC.resume(); }catch(e){ return gagal(); }
+  var main = function(buf){
+    try{ var src = AC.createBufferSource(); src.buffer = buf; src.connect(AC.destination); src.start(); }catch(e){ return gagal(); }
+    try{ if(navigator.vibrate) navigator.vibrate([300,120,300,120,600]); }catch(e){}
+    cb && cb(buf.duration);
+  };
+  if(bufSuara[nama]) return main(bufSuara[nama]);
+  fetch('suara-'+nama+'.mp3').then(function(r){ if(!r.ok) throw 0; return r.arrayBuffer(); }).then(function(b){
+    return new Promise(function(ok, no){ AC.decodeAudioData(b, ok, no); });
+  }).then(function(buf){ bufSuara[nama] = buf; main(buf); }).catch(gagal);
+}
+function jamUcap(j){
+  var m = String(j||'').match(/^(\d{1,2})[:.](\d{2})/); if(!m) return j ? String(j) : 'belum ditentukan';
+  var h = +m[1], mm = +m[2], bag = h < 11 ? 'pagi' : h < 15 ? 'siang' : h < 18 ? 'sore' : 'malam', h12 = h % 12 || 12;
+  return h12 + (mm ? ' lewat ' + mm : '') + ' ' + bag;
+}
+function teksOnl(o, tanpaJudul){ return (tanpaJudul ? '' : 'Pesanan online. ') + (o.nama||'') + ', ambil jam ' + jamUcap(o.jam) + ', ' + (o.bayar==='Sudah transfer' ? 'sudah transfer' : 'bayar saat ambil') + '.'; }
+function bacakan(teks, cb){
+  var selesai = false, akhir = function(){ if(!selesai){ selesai = true; cb && cb(); } };
+  try{
+    if(!window.speechSynthesis || !window.SpeechSynthesisUtterance) return akhir();
+    var u = new SpeechSynthesisUtterance(teks); u.lang = 'id-ID'; u.rate = 1.0;
+    var v = (speechSynthesis.getVoices()||[]).filter(function(x){ return /^id|^in[-_]/i.test(x.lang); })[0]; if(v){ try{ u.voice = v; }catch(e){} }
+    u.onend = akhir; u.onerror = akhir; speechSynthesis.cancel(); speechSynthesis.speak(u);
+    setTimeout(akhir, 4000 + teks.length * 120);
+  }catch(e){ akhir(); }
+}
+try{ if(window.speechSynthesis) speechSynthesis.getVoices(); }catch(e){}
+
+/* v3.7: layar tetap menyala selama shift */
+var kunciLayar = null;
+function aturLayar(){
+  var mau = S.layarNyala !== false && !!shift && !ui.own.open && document.visibilityState==='visible' && !!navigator.wakeLock;
+  if(mau && !kunciLayar){
+    kunciLayar = 'minta';
+    navigator.wakeLock.request('screen').then(function(l){ kunciLayar = l; l.addEventListener('release', function(){ kunciLayar = null; }); }).catch(function(){ kunciLayar = null; });
+  } else if(!mau && kunciLayar && kunciLayar.release){ kunciLayar.release().catch(function(){}); kunciLayar = null; }
+}
+
+/* v3.7: notifikasi push (Firebase) saat aplikasi tertutup / layar mati */
+var FB_VER = '10.12.2', fbSiap = null;
+function pushDidukung(){ return !!(cfg.fcm && cfg.fcm.vapidKey && 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window && window.isSecureContext); }
+function muatFirebase(){
+  if(fbSiap) return fbSiap;
+  var skrip = function(src){ return new Promise(function(ok, no){ var el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = function(){ no(new Error('Gagal memuat Firebase. Cek internet.')); }; document.head.appendChild(el); }); };
+  var base = 'https://www.gstatic.com/firebasejs/'+FB_VER+'/';
+  fbSiap = (window.firebase && firebase.messaging ? Promise.resolve() : skrip(base+'firebase-app-compat.js').then(function(){ return skrip(base+'firebase-messaging-compat.js'); })).then(function(){
+    if(!firebase.apps.length) firebase.initializeApp({apiKey:cfg.fcm.apiKey, authDomain:cfg.fcm.authDomain, projectId:cfg.fcm.projectId, messagingSenderId:cfg.fcm.messagingSenderId, appId:cfg.fcm.appId});
+    return firebase.messaging();
+  });
+  fbSiap.catch(function(){ fbSiap = null; });
+  return fbSiap;
+}
+function pushStatus(peran){
+  if(!cfg.fcm) return 'belum';
+  if(!pushDidukung()) return 'tidak';
+  if(Notification.permission==='denied') return 'ditolak';
+  var p = (S.push||{})[peran];
+  return p && p.token && Notification.permission==='granted' ? 'aktif' : 'mati';
+}
+function daftarPush(peran, diam){
+  if(!pushDidukung()){ if(!diam) toast(cfg.fcm ? 'HP / browser ini belum mendukung notifikasi' : 'Notifikasi belum disiapkan di Google Sheet (lihat panduan 3.7)'); return; }
+  var izin = Notification.permission==='granted' ? Promise.resolve('granted') : Promise.resolve(Notification.requestPermission());
+  izin.then(function(z){
+    if(z!=='granted') throw new Error('Izin notifikasi ditolak. Izinkan lewat Pengaturan Chrome → Setelan situs → Notifikasi.');
+    return muatFirebase().then(function(m){ return navigator.serviceWorker.ready.then(function(reg){ return m.getToken({vapidKey:cfg.fcm.vapidKey, serviceWorkerRegistration:reg}); }); });
+  }).then(function(tok){
+    if(!tok) throw new Error('Gagal mendapat kode notifikasi');
+    S.push = S.push || {};
+    var lama = S.push[peran] || {}, outlet = peran==='kasir' ? S.outlet : 'Semua';
+    S.push[peran] = {token:tok, outlet:outlet, at:new Date().toISOString()}; save('settings', S);
+    if(lama.token !== tok || lama.outlet !== outlet || !diam){
+      queue.push({type:'token', uid:'TK-'+S.device+'-'+Date.now().toString(36).toUpperCase(), token:tok, peran:peran, outlet:outlet, device:S.device,
+        nama: peran==='pemilik' ? ownNama() : (shift ? shift.kasir : ''), pin: peran==='pemilik' ? (cfg.pin||'') : '', time:new Date().toISOString()});
+      save('queue', queue); syncNow();
+    }
+    if(!diam){ toast('Notifikasi aktif di HP ini ✓'); render(); }
+  }).catch(function(e){ if(!diam){ toast(e.message || 'Gagal mengaktifkan notifikasi'); render(); } });
+}
+function matikanPush(peran){
+  var p = (S.push||{})[peran]; if(!p) return;
+  queue.push({type:'token', uid:'TK-'+S.device+'-'+Date.now().toString(36).toUpperCase(), token:p.token, peran:peran, outlet:p.outlet, device:S.device,
+    mati:true, pin: peran==='pemilik' ? (cfg.pin||'') : '', time:new Date().toISOString()});
+  delete S.push[peran]; save('settings', S); save('queue', queue); syncNow(); toast('Notifikasi dimatikan di HP ini'); render();
+}
+function segarkanPush(){
+  if(!S.push || !pushDidukung() || Notification.permission!=='granted') return;
+  Object.keys(S.push).forEach(function(peran){ if(S.push[peran]) daftarPush(peran, true); });
+}
+if('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', function(e){
+  var m = e.data || {}; if(m.jenis!=='push') return;
+  var d = m.data || {};
+  if(d.jenis==='online') cekOnline();
+  else if(ui.own.open){ if(typeof fetchOwner==='function') fetchOwner(true); if(ui.own.tab==='online' && typeof fetchOwnOnline==='function') fetchOwnOnline(true); }
+});
+function kartuPush(peran){
+  var st = pushStatus(peran), p = (S.push||{})[peran]||{};
+  var ket = {belum:'⚪ Belum disiapkan di Google Sheet (lihat Panduan Pemasangan 3.7).', tidak:'⚪ HP / browser ini tidak mendukung notifikasi. Pakai Chrome terbaru dan buka dari ikon di layar utama.',
+    ditolak:'🔴 Izin notifikasi ditolak. Buka Pengaturan Chrome → Setelan situs → Notifikasi, izinkan, lalu tekan Aktifkan.',
+    mati:'⚪ Belum aktif di HP ini.', aktif:'🟢 Aktif'+(peran==='kasir' ? ' untuk outlet '+esc(p.outlet||S.outlet) : '')+'.'}[st];
+  var h = '<p class="muted" style="margin:0 0 8px">'+ket+'</p>';
+  if(st==='mati' || st==='ditolak') h += '<button class="btn" data-a="pushon" data-v="'+peran+'">🔔 Aktifkan notifikasi di HP ini</button>';
+  if(st==='aktif') h += '<div class="row" style="gap:8px"><button class="btn alt" data-a="pushon" data-v="'+peran+'" style="flex:1">Daftar ulang</button><button class="btn alt" data-a="pushoff" data-v="'+peran+'" style="flex:1">Matikan</button></div>';
+  return h;
+}
 var ingat = load('ingat', {});
 function sekali(key){ if(ingat[key]) return false; ingat[key] = Date.now(); var batas = Date.now()-3*86400000; Object.keys(ingat).forEach(function(k){ if(ingat[k] < batas) delete ingat[k]; }); save('ingat', ingat); return true; }
 function menitDari(hhmm){ var p = String(hhmm||'').split(':'); return p.length<2 ? null : Number(p[0])*60 + Number(p[1]); }
@@ -687,8 +799,21 @@ function cekOnline(){
     }).catch(function(){});
 }
 function rankStat(s){ return {'Baru':0,'Diproses':1,'Siap':2,'Selesai':3,'Dibatalkan':3}[s]||0; }
-function mulaiAlarm(){ if(!bunyiOn('online') || onl.alarm) return; beep(3,'online'); onl.alarm = setInterval(function(){ if(!onlBaru().length){ stopAlarm(); return; } beep(3,'online'); }, 5000); }
-function stopAlarm(){ if(onl.alarm){ clearInterval(onl.alarm); onl.alarm = null; } }
+/* v3.7: suara khas + bacakan pesanan, berulang sampai dibuka */
+function mulaiAlarm(){ if(!bunyiOn('online') || onl.alarm) return; onl.alarm = true; siklusAlarm(); }
+function siklusAlarm(){
+  if(!onl.alarm) return;
+  if(!onlBaru().length){ stopAlarm(); return; }
+  var nama = suaraOnl();
+  putarSuara(nama, function(dur){
+    onl.tm = setTimeout(function(){
+      if(!onl.alarm) return;
+      var lanjut = function(){ if(onl.alarm) onl.tm = setTimeout(siklusAlarm, 4000); };
+      if(S.bacakan !== false) bacakan(onlBaru().map(function(o){ return teksOnl(o, nama==='dani'); }).join(' '), lanjut); else lanjut();
+    }, Math.max(0.3, dur - 0.5) * 1000);
+  });
+}
+function stopAlarm(){ onl.alarm = null; if(onl.tm){ clearTimeout(onl.tm); onl.tm = null; } try{ if(window.speechSynthesis) speechSynthesis.cancel(); }catch(e){} }
 setInterval(cekOnline, 60000);
 function onlBar(){
   var a = onlAktif(); if(!a.length) return '';
@@ -938,6 +1063,7 @@ function bukaShift(){
     jadwalSelesai:shift.jadwalSelesai, masuk:shift.buka, telat:telat, status:S.latihan?'Latihan':'OK'});
   save('queue', queue);
   ui.handover = null; save('handover', null); ui.modal = null; ui.shiftKasir = null; ui.shiftPilih = undefined; ui.tab = 'kasir';
+  setTimeout(function(){ if(S.push && S.push.kasir) daftarPush('kasir', true); }, 1500);
   render(); toast('Absen masuk '+jam(now)+(telat?' · telat '+telat+' menit':'')+' · Selamat jualan, '+shift.kasir+'!'); syncNow();
 }
 function arrivalOf(nama){
@@ -1189,7 +1315,13 @@ function viewAtur(){
     '<button class="btn alt" data-a="saveopt" style="margin-top:10px">Simpan</button>'+(S.printer?'<button class="btn alt" data-a="testprint" style="margin-top:6px">Tes cetak</button>':'')+'</div>';
   var bl = [['online','Pesanan online masuk (berulang sampai dibuka)'],['koreksi','Ajuan koreksi disetujui / ditolak'],['shift','Pengingat 15 menit sebelum shift selesai & jam tutup'],['offline','Data belum terkirim lebih dari 30 menit'],['pemilik','Mode Pemilik: ajuan koreksi baru & status pesanan online']];
   h += '<div class="card"><h3>Bunyi & getar <span>saat aplikasi terbuka</span></h3>'+bl.map(function(b){ return '<label class="sw"><span>'+b[1]+'</span><input type="checkbox" id="bn_'+b[0]+'" '+(bunyiOn(b[0])?'checked':'')+'></label>'; }).join('')+
-    '<div class="row" style="gap:8px;margin-top:10px"><button class="btn alt" data-a="bunyitest" style="flex:1">Tes bunyi</button><button class="btn alt" data-a="bunyisave" style="flex:1">Simpan</button></div></div>';
+    '<label class="f">Suara pesanan online</label><select class="inp" id="bn_suara">'+SUARA.map(function(x){ return '<option value="'+x[0]+'"'+(suaraOnl()===x[0]?' selected':'')+'>'+esc(x[1])+'</option>'; }).join('')+'</select>'+
+    '<label class="sw"><span>Bacakan isi pesanan<br><small class="muted">nama, jam ambil, cara bayar</small></span><input type="checkbox" id="bn_baca" '+(S.bacakan!==false?'checked':'')+'></label>'+
+    '<label class="sw"><span>Layar tetap menyala selama shift<br><small class="muted">sebaiknya HP sambil dicas</small></span><input type="checkbox" id="bn_layar" '+(S.layarNyala!==false?'checked':'')+'></label>'+
+    '<div class="row" style="gap:8px;margin-top:10px"><button class="btn alt" data-a="bunyitest" style="flex:1">Tes suara</button><button class="btn alt" data-a="bunyisave" style="flex:1">Simpan</button></div></div>';
+  h += '<div class="card"><h3>Notifikasi saat HP terkunci <span>aplikasi tertutup</span></h3>'+kartuPush('kasir')+
+    '<p class="muted" style="margin-top:10px">Notifikasi diulang tiap menit sampai pesanan ditekan Proses. Nada notifikasi diatur dari Pengaturan HP → Aplikasi → Kasir LV (atau Chrome) → Notifikasi → Suara.</p>'+
+    '<a class="btn alt" href="suara-dani.mp3" download="Nada Lekker Victory.mp3" style="display:block;text-align:center;text-decoration:none;margin-top:6px">⬇️ Unduh nada notifikasi</a></div>';
   h += '<div class="card"><h3>Lainnya</h3><button class="btn alt" data-a="kunci">🔒 Kunci pengaturan</button></div>';
   return h;
 }
@@ -1219,7 +1351,7 @@ function maybeRefresh(force){
   lastTry = Date.now();
   fetchConfig(function(ok){ if(ok && !shift) { /* layar masuk shift ikut diperbarui */ if(!document.querySelector('.sheet-bg')) render(); } });
 }
-document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible'){ maybeRefresh(); if(queue.length) syncNow(); else cekKoreksi(); cekOnline(); } });
+document.addEventListener('visibilitychange', function(){ aturLayar(); if(document.visibilityState==='visible'){ maybeRefresh(); if(queue.length) syncNow(); else cekKoreksi(); cekOnline(); } });
 setTimeout(cekOnline, 4000);
 setInterval(function(){ maybeRefresh(); }, 600000);
 
@@ -1273,8 +1405,10 @@ function renderOwner(){
 function ownDash(d){
   var sub = ui.own.sub || 'jual';
   var top = '<div class="seg">'+[['jual','Penjualan'],['tutup','Tutup toko']].map(function(x){ return '<button data-a="ownsub" data-v="'+x[0]+'" class="'+(sub===x[0]?'on':'')+'">'+x[1]+'</button>'; }).join('')+'</div>';
-  if(sub==='tutup') return top + ownTutup();
-  return top + ownDashJual(d);
+  var np = '<div class="card"><h3>Notifikasi ke HP pemilik <span>saat aplikasi tertutup</span></h3>'+kartuPush('pemilik')+
+    '<p class="muted" style="margin-top:8px">Untuk: ajuan koreksi baru, pesanan online siap / selesai / ditolak, dan pesanan yang 10 menit belum diproses outlet.</p></div>';
+  if(sub==='tutup') return top + ownTutup() + np;
+  return top + ownDashJual(d) + np;
 }
 function ownDashJual(d){
   var p = ui.own.period;
@@ -1836,8 +1970,13 @@ document.addEventListener('click', function(e){
     case 'pondel': simpanPon(); ui.pon.items.splice(idx,1); render(); break;
     case 'ponkirim': ponKirim(); break;
     case 'ponbatal': ponBatal(v); break;
-    case 'bunyitest': beep(2); break;
-    case 'bunyisave': S.bunyi = {}; ['online','koreksi','shift','offline','pemilik'].forEach(function(k){ var c = $('bn_'+k); S.bunyi[k] = c ? c.checked : true; }); save('settings', S); toast('Tersimpan'); break;
+    case 'bunyitest': (function(){ var sel = $('bn_suara'), nm = sel ? sel.value : suaraOnl(), baca = $('bn_baca') ? $('bn_baca').checked : S.bacakan!==false;
+      putarSuara(nm, function(dur){ if(baca) setTimeout(function(){ bacakan(teksOnl({nama:'Kak Rina', jam:'17:00', bayar:'Sudah transfer'}, nm==='dani')); }, Math.max(0.3, dur-0.5)*1000); }); })(); break;
+    case 'pushon': daftarPush(v); break;
+    case 'pushoff': matikanPush(v); break;
+    case 'bunyisave': S.bunyi = {}; ['online','koreksi','shift','offline','pemilik'].forEach(function(k){ var c = $('bn_'+k); S.bunyi[k] = c ? c.checked : true; });
+      if($('bn_suara')) S.suaraOnl = $('bn_suara').value; if($('bn_baca')) S.bacakan = $('bn_baca').checked; if($('bn_layar')) S.layarNyala = $('bn_layar').checked;
+      save('settings', S); aturLayar(); toast('Tersimpan'); break;
     case 'kirbaris': simpanIsiKiriman(); ui.kir.lines++; openKiriman(ui.kir.pemilik); pulihkanIsiKiriman(); break;
     case 'kirok': kirimanOk(); break;
     case 'bellok': ui.bel.lokasi = v; render(); break;
@@ -1916,7 +2055,7 @@ document.addEventListener('click', function(e){
 
 /* =================== MULAI =================== */
 render();
-if(S.url){ lastTry = Date.now(); fetchConfig(function(ok){ if(ok && !document.querySelector('.sheet-bg')) render(); }); syncNow(); }
+if(S.url){ lastTry = Date.now(); fetchConfig(function(ok){ if(ok && !document.querySelector('.sheet-bg')) render(); setTimeout(segarkanPush, 3000); }); syncNow(); }
 if('serviceWorker' in navigator && location.protocol === 'https:'){
   try{ navigator.serviceWorker.register('sw.js').catch(function(){}); }catch(e){}
 }
