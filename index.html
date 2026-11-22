@@ -1321,7 +1321,9 @@ function viewAtur(){
     '<div class="row" style="gap:8px;margin-top:10px"><button class="btn alt" data-a="bunyitest" style="flex:1">Tes suara</button><button class="btn alt" data-a="bunyisave" style="flex:1">Simpan</button></div></div>';
   h += '<div class="card"><h3>Notifikasi saat HP terkunci <span>aplikasi tertutup</span></h3>'+kartuPush('kasir')+
     '<p class="muted" style="margin-top:10px">Notifikasi diulang tiap menit sampai pesanan ditekan Proses. Nada notifikasi diatur dari Pengaturan HP → Aplikasi → Kasir LV (atau Chrome) → Notifikasi → Suara.</p>'+
-    '<a class="btn alt" href="suara-dani.mp3" download="Nada Lekker Victory.mp3" style="display:block;text-align:center;text-decoration:none;margin-top:6px">⬇️ Unduh nada notifikasi</a></div>';
+    '<label class="f">Nada untuk notifikasi HP terkunci</label><select class="inp" id="nadaPush">'+SUARA.filter(function(x){ return x[0]!=='bip'; }).map(function(x){ return '<option value="'+x[0]+'"'+((S.nadaPush||'dani')===x[0]?' selected':'')+'>'+esc(x[1])+'</option>'; }).join('')+'</select>'+
+    '<div class="row" style="gap:8px;margin-top:8px"><button class="btn alt" data-a="nadates" style="flex:1">▶ Dengar</button><button class="btn alt" data-a="nadaunduh" style="flex:1">⬇️ Unduh nada</button></div>'+
+    '<p class="muted" style="margin-top:6px">Setelah diunduh, pilih file "Nada …" di Pengaturan HP. Boleh juga memakai nada lain yang ada di HP.</p></div>';
   h += '<div class="card"><h3>Lainnya</h3><button class="btn alt" data-a="kunci">🔒 Kunci pengaturan</button></div>';
   return h;
 }
@@ -1974,6 +1976,11 @@ document.addEventListener('click', function(e){
       putarSuara(nm, function(dur){ if(baca) setTimeout(function(){ bacakan(teksOnl({nama:'Kak Rina', jam:'17:00', bayar:'Sudah transfer'}, nm==='dani')); }, Math.max(0.3, dur-0.5)*1000); }); })(); break;
     case 'pushon': daftarPush(v); break;
     case 'pushoff': matikanPush(v); break;
+    case 'nadates': putarSuara($('nadaPush') ? $('nadaPush').value : 'dani'); break;
+    case 'nadaunduh': (function(){ var n = $('nadaPush') ? $('nadaPush').value : 'dani', nm = (SUARA.filter(function(x){ return x[0]===n; })[0]||['','Lekker Victory'])[1];
+      S.nadaPush = n; save('settings', S);
+      var a = document.createElement('a'); a.href = 'suara-'+n+'.mp3'; a.download = 'Nada ' + nm.replace(/^Suara\s+/, '').replace(/\s*\(.*\)/, '') + '.mp3'; document.body.appendChild(a); a.click(); a.remove();
+      toast('Nada diunduh. Pilih di Pengaturan HP → Notifikasi → Suara'); })(); break;
     case 'bunyisave': S.bunyi = {}; ['online','koreksi','shift','offline','pemilik'].forEach(function(k){ var c = $('bn_'+k); S.bunyi[k] = c ? c.checked : true; });
       if($('bn_suara')) S.suaraOnl = $('bn_suara').value; if($('bn_baca')) S.bacakan = $('bn_baca').checked; if($('bn_layar')) S.layarNyala = $('bn_layar').checked;
       save('settings', S); aturLayar(); toast('Tersimpan'); break;
