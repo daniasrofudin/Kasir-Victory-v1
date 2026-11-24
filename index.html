@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#F8F4EE">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400..800&display=swap">
+<link rel="stylesheet" id="hurufLink" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400..800&display=swap">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Kasir Lekker Victory</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -260,7 +260,10 @@ svg.chart g.cb.redup path{opacity:.55}
 :root,[data-tema=krem]{--latar:#F8F4EE;--putih:#fff;--balik:#fff;--abu2:#B0A08F;--bar:#1F1A17;--bar2:#2B211B;--hero1:#2B211B;--hero2:#1F1A17;--c-bar:#5E5047;--c-ghost:#F3E3C8;--bayang:rgba(60,40,20,.06)}
 [data-tema=malam]{--latar:#15110E;--putih:#221B17;--krem:#1B1512;--krem2:#2E251F;--teks:#F3E9DE;--coklat:#F3E9DE;--coklat2:#CDB9A6;--abu:#9C8B7B;--abu2:#6F6157;--garis:#3A2F28;--sel:#3A2A17;--balik:#15110E;--bar:#2A211C;--bar2:#3A2E26;--hero1:#3A2E26;--hero2:#2A211C;--c-bar:#CDB9A6;--c-ghost:#4A3A2C;--hijau:#3CC17F;--merah:#F07070;--oranye:#F0A048;--bayang:rgba(0,0,0,.35);color-scheme:dark}
 [data-tema=cerah]{--latar:#FFF6E0;--putih:#fff;--krem:#FFFBF0;--krem2:#FBEBCB;--teks:#3A2A1E;--coklat:#3A2A1E;--coklat2:#7A5A3E;--abu:#A08A70;--abu2:#C4AE92;--garis:#F1D9B5;--sel:#FFE3C4;--balik:#fff;--mentega:#F28A3C;--bar:#3A2A1E;--bar2:#5A4030;--hero1:#E86A2C;--hero2:#F28A3C;--c-bar:#7A5A3E;--c-ghost:#F6DCC0}
-html,body{font-family:'Plus Jakarta Sans',system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--latar);transition:background .25s}
+html{--huruf-bawaan:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--huruf-pemilik:'Plus Jakarta Sans',var(--huruf-bawaan)}
+html,body{font-family:var(--huruf-bawaan);background:var(--latar);transition:background .25s}
+body.lv-own,#splash b{font-family:var(--huruf-pemilik)}
+.cartbar .bayar{flex:0 0 auto;white-space:nowrap}
 .card{box-shadow:0 1px 2px var(--bayang),0 6px 18px var(--bayang)}
 [data-tema=malam] .card,[data-tema=malam] .qgrid button,[data-tema=malam] .tiles div{border-color:var(--garis)}
 [data-tema=malam] .inp{background:var(--krem)}
@@ -356,7 +359,7 @@ var DEFAULT_CFG = {
   bahan: [],
   bahanInfo: []
 };
-var APP_VERSI = '3.8';
+var APP_VERSI = '3.8.1';
 var CFG_KEYS = ['karyawan','jadwal','kategori','batasKeluar','toleransi','member','members','biaya','bahan','bahanInfo'];
 
 var cfg = load('cfg', DEFAULT_CFG);
@@ -2623,6 +2626,13 @@ function terapkanTema(){
   if(t !== temaAktif){ temaAktif = t; r.setAttribute('data-tema', t); }
   if(hexOk(w.utama)){ r.style.setProperty('--bar', w.utama); if(t!=='cerah'){ r.style.setProperty('--hero2', w.utama); } } else ['--bar','--hero2'].forEach(function(p){ r.style.removeProperty(p); });
   if(hexOk(w.aksen)) r.style.setProperty('--mentega', w.aksen); else r.style.removeProperty('--mentega');
+  var hf = String(w.huruf||'').trim(), lk = document.getElementById('hurufLink');
+  if(/^bawaan$/i.test(hf)){ r.style.setProperty('--huruf-pemilik', 'var(--huruf-bawaan)'); }
+  else if(hf && /^[A-Za-z0-9 ]{2,40}$/.test(hf) && !/^plus jakarta sans$/i.test(hf)){
+    r.style.setProperty('--huruf-pemilik', "'"+hf+"',var(--huruf-bawaan)");
+    var href = 'https://fonts.googleapis.com/css2?family='+encodeURIComponent(hf).replace(/%20/g,'+')+':wght@400;600;700;800&display=swap';
+    if(lk && lk.getAttribute('href')!==href) lk.setAttribute('href', href);
+  } else r.style.removeProperty('--huruf-pemilik');
   var m = document.querySelector('meta[name=theme-color]'); if(m) m.setAttribute('content', t==='malam' ? '#15110E' : t==='cerah' ? '#FFF6E0' : '#F8F4EE');
 }
 setInterval(function(){ var lama = temaAktif; if(temaSekarang()!==lama && bolehRender()) render(); }, 60000);
@@ -2631,6 +2641,11 @@ topColor = function(n){ var r = _topColor(n); if(!gelap()) return r; return {c:'
 function salam(){ var j = new Date().getHours(); return j<11 ? 'Selamat pagi' : j<15 ? 'Selamat siang' : j<18 ? 'Selamat sore' : 'Selamat malam'; }
 function getarHalus(){ try{ if(navigator.vibrate && bunyiOn('getar')!==false) navigator.vibrate(8); }catch(e){} }
 var ILUS = '<svg viewBox="0 0 74 50" aria-hidden="true"><path d="M8 44a29 29 0 0 1 58 0z" fill="var(--mentega)" opacity=".85"/><circle cx="24" cy="36" r="3.2" fill="var(--c-bar)" opacity=".5"/><circle cx="37" cy="29" r="2.8" fill="var(--c-bar)" opacity=".5"/><circle cx="50" cy="37" r="3.2" fill="var(--c-bar)" opacity=".5"/><path d="M27 14l4 5 6-8 6 8 4-5v6H27z" fill="var(--c-bar)" opacity=".55"/><rect x="4" y="44" width="66" height="3" rx="1.5" fill="var(--garis)"/></svg>';
+function racikTerlihat(){
+  var box = document.querySelector('.racikbox'), bar = document.querySelector('.cartbar .in'); if(!box || !bar) return;
+  var bawah = box.getBoundingClientRect().bottom, batas = bar.getBoundingClientRect().top - 10;
+  if(bawah > batas) window.scrollBy({top:bawah - batas, behavior:'smooth'});
+}
 function kosong(t){ return '<div class="kosong">'+ILUS+esc(t)+'</div>'; }
 
 /* angka total bergulir */
@@ -2657,7 +2672,7 @@ function kartuTampilan(){
   return '<div class="card"><h3>Tampilan <span>khusus HP ini</span></h3><div class="tema4">'+TEMA.map(function(x){
       return '<button data-a="tema" data-v="'+x[0]+'" class="'+(t===x[0]?'on':'')+'"><span class="sw3">'+x[3].map(function(c){ return '<i style="background:'+c+'"></i>'; }).join('')+'</span><b>'+x[1]+'</b><small>'+x[2]+'</small></button>'; }).join('')+'</div>'+
     '<button class="btn alt" data-a="galeri" style="margin-top:10px">Lihat galeri tampilan</button>'+
-    '<p class="muted" style="margin:8px 0 0">Warna utama dan aksen bisa diganti untuk semua HP dari Sheet → Kasir Menu, sel N46 dan N47 (kode warna, mis. #1F1A17).</p></div>';
+    '<p class="muted" style="margin:8px 0 0">Warna utama dan aksen (kode warna, mis. #1F1A17) serta huruf Mode Pemilik bisa diganti untuk semua HP dari Sheet → Kasir Menu, sel N46, N47, dan N48. Layar kasir selalu memakai huruf bawaan HP.</p></div>';
 }
 function bukaGaleri(){
   var tp = activeToppings().slice(0, 4);
@@ -2861,7 +2876,7 @@ document.addEventListener('click', function(e){
     case 'kanal': ui.kanal = v; render(); break;
     case 'top':
       if(ui.racik.length >= (cfg.maxTopping||5)){ toast('Maksimal '+(cfg.maxTopping||5)+' topping per pcs'); break; }
-      ui.racik.push(v); getarHalus(); render(); break;
+      ui.racik.push(v); getarHalus(); render(); racikTerlihat(); break;
     case 'untop': var ix = ui.racik.lastIndexOf(v); if(ix>=0) ui.racik.splice(ix,1); render(); break;
     case 'unslot': ui.racik.splice(idx,1); if(!ui.racik.length) ui.qty = 1; render(); break;
     case 'eye': ui.showOmzet = !ui.showOmzet; clearTimeout(ui.eyeT); if(ui.showOmzet) ui.eyeT = setTimeout(function(){ ui.showOmzet = false; if(ui.tab==='kasir' && shift) render(); }, 8000); render(); break;
