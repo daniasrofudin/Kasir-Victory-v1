@@ -1,7 +1,9 @@
-// Kasir Lekker Victory - service worker v3.7
+// Kasir Lekker Victory - service worker v3.8
+// v3.8: huruf Plus Jakarta Sans dari Google Fonts disimpan di HP setelah dibuka pertama kali, jadi tetap tampil tanpa internet.
 // Halaman diambil dari internet dulu (supaya pembaruan langsung terpakai); kalau tidak ada sinyal, pakai salinan tersimpan.
 // v3.7: menerima notifikasi push (Firebase) dan menampilkannya walaupun aplikasi tertutup / layar mati.
-var CACHE = 'kasir-lv-v3-7';
+var CACHE = 'kasir-lv-v3-8';
+var CACHE_FONT = 'kasir-lv-font-1';
 var FILES = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-192.png', './badge-96.png', './suara-lonceng.mp3'];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) {
@@ -10,7 +12,7 @@ self.addEventListener('install', function (e) {
 });
 self.addEventListener('activate', function (e) {
   e.waitUntil(caches.keys().then(function (keys) {
-    return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+    return Promise.all(keys.filter(function (k) { return k !== CACHE && k !== CACHE_FONT; }).map(function (k) { return caches.delete(k); }));
   }).then(function () { return self.clients.claim(); }));
 });
 function denganBatasWaktu(p, ms) {
@@ -18,6 +20,15 @@ function denganBatasWaktu(p, ms) {
 }
 self.addEventListener('fetch', function (e) {
   var req = e.request;
+  var host = new URL(req.url).hostname;
+  if (req.method === 'GET' && (host === 'fonts.googleapis.com' || host === 'fonts.gstatic.com')) { // huruf: simpan sekali, pakai terus
+    e.respondWith(caches.open(CACHE_FONT).then(function (c) {
+      return c.match(req).then(function (hit) {
+        return hit || fetch(req).then(function (res) { if (res && (res.ok || res.type === 'opaque')) c.put(req, res.clone()); return res; });
+      });
+    }).catch(function () { return new Response('', { status: 200, headers: { 'Content-Type': 'text/css' } }); }));
+    return;
+  }
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return; // data ke Google tidak disimpan
   e.respondWith(caches.open(CACHE).then(function (c) {
     return denganBatasWaktu(fetch(req, { cache: 'no-store' }), 4000).then(function (res) {
